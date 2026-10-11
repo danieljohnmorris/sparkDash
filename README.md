@@ -501,7 +501,7 @@ sparkDash/
 | GET | `/api/fleet-energy` | Estimated fleet watts, rolling energy, coverage, and Wh/output-token |
 | GET | `/api/fleet-energy/history` | Hourly / daily energy buckets for the Fleet energy page |
 | GET | `/api/llm-token-totals` · `/api/llm-token-totals/history` | Cumulative LLM tokens by model, and the hourly / daily history behind the Token totals page |
-| GET | `/api/sparks/:id/gpu-history` | Last hours of GPU utilization, temperature and power % (`windowMs`, up to 8 h; parallel arrays) |
+| GET | `/api/sparks/:id/gpu-history` | GPU utilization, temperature and power % (`windowMs`; up to 8 h at ~2 s resolution, up to 7 days at minute resolution from the long-retention store; parallel arrays) |
 | GET | `/api/events` | Fleet event log (`limit`, `sparkId`, `sinceId`, `beforeId`; 2000 kept) |
 | GET/POST/PUT/DELETE | `/api/sparks/:id/llm-launchers[/:lid]` | Registered start.sh / stop.sh model launchers; `POST …/:lid/start` and `…/stop` run them, `GET …/jobs/:jobId` streams the shell output |
 | GET/POST/DELETE | `/api/sparks/:id/tool-eval/…` | Tool Eval Bench on a Spark: `status`, `install`, `preview`, `probe`, `runs` (start / list / stream / attach / stop / refresh / `result` / delete); `GET /api/tool-eval/spec` serves the option spec |
