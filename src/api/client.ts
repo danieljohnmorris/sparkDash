@@ -33,6 +33,7 @@ import type {
   StartQualityBenchRequest,
   ClockCapSparkStatus,
   ClockCapApplyResponse,
+  ClockCapModeResponse,
 } from "./types";
 import { authHeaders, reportAuthRequired } from "./authToken";
 
@@ -584,6 +585,20 @@ export function setClockCap(
   return apiFetch("/api/sparks/clock-cap", {
     method: "POST",
     body: JSON.stringify({ sparkIds, mhz }),
+  });
+}
+
+/**
+ * Turn the Auto clock cap (1800–2200 MHz, temperature-driven) on for the
+ * given targets. Any preset / Unlocked choice turns it back off.
+ */
+export function setClockCapMode(
+  sparkIds: string[] | "all",
+  mode: "auto"
+): Promise<ClockCapModeResponse> {
+  return apiFetch("/api/sparks/clock-cap/mode", {
+    method: "POST",
+    body: JSON.stringify({ sparkIds, mode }),
   });
 }
 

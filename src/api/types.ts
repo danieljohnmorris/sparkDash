@@ -1490,7 +1490,35 @@ export interface ClockCapSparkStatus {
   markerMhz?: number | null;
   /** Live graphics clock from nvidia-smi --query-gpu=clocks.gr. */
   graphicsClockMHz: number | null;
+  /** GPU temperature in °C from the same status read. */
+  tempC?: number | null;
+  /** Temperature-controller state; null when the node is not in Auto. */
+  auto?: ClockCapAutoState | null;
   error?: string;
+}
+
+/** One applied Auto step (newest first in the log). */
+export interface ClockCapAutoStep {
+  at: number;
+  /** Cap before the step; null when Auto (re)started from stock. */
+  from: number | null;
+  to: number;
+  tempC: number | null;
+  dir: "down" | "up";
+}
+
+/** Auto (1800–2200 MHz) controller state for one node. */
+export interface ClockCapAutoState {
+  enabled: boolean;
+  /** Cap the controller last applied (MHz). */
+  cap: number | null;
+  /** Last polled GPU temperature (°C). */
+  lastTempC: number | null;
+  lastStep: ClockCapAutoStep | null;
+  /** Newest first, capped at ~20 entries. */
+  log: ClockCapAutoStep[];
+  /** Last controller/apply failure for this node, or null. */
+  lastError: string | null;
 }
 
 export interface ClockCapResult {
@@ -1507,4 +1535,21 @@ export interface ClockCapApplyResponse {
   success: boolean;
   mhz: number | null;
   results: ClockCapResult[];
+}
+
+export interface ClockCapModeResult {
+  id: string;
+  name: string;
+  ok: boolean;
+  /** Cap Auto starts from (current in-band cap, else 2000). */
+  cap?: number;
+  tempC?: number | null;
+  graphicsClockMHz?: number | null;
+  error?: string;
+}
+
+export interface ClockCapModeResponse {
+  success: boolean;
+  mode: "auto";
+  results: ClockCapModeResult[];
 }

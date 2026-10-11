@@ -368,6 +368,40 @@ The marker is read from `/run/sparkdash/gpu-clock-cap` (for a root-run unit)
 or `~/.config/sparkdash/gpu-clock-cap` of the SSH user. The optional boot_id
 makes a stale marker disappear after a reboot, when the lock is gone too.
 
+### Auto mode (1800–2200 MHz by temperature)
+
+The **Auto 1800–2200** button in the clock cap panel hands the cap to a
+backend controller (`server/clockCapAuto.js`). One loop ticks every Auto node
+roughly every 10 s (one SSH round trip per node) and steps the cap 100 MHz
+within 1800–2200 MHz:
+
+- **step down** when the GPU reaches 72 °C — immediately, without the dwell,
+  from 77 °C while the temperature is still rising;
+- **step up** when it drops to 67 °C or below;
+- **hold** between 67 and 72, and never step more than once a minute per node
+  (the dwell; the 77 °C fast path above is the only exception).
+
+Thresholds and cadence are env-configurable, never hardcoded in the UI:
+
+```bash
+SPARKDASH_CLOCK_AUTO_HIGH_C=72    # step-down ("hold") threshold, °C
+SPARKDASH_CLOCK_AUTO_LOW_C=67     # step-up ("release") threshold, °C
+SPARKDASH_CLOCK_AUTO_HOT_C=77    # dwell-skipping fast path, °C
+SPARKDASH_CLOCK_AUTO_POLL_MS=10000
+SPARKDASH_CLOCK_AUTO_DWELL_MS=60000
+```
+
+A node in Auto keeps a `~/.config/sparkdash/gpu-clock-mode` file containing
+`auto`, next to the cap marker — that is how a restarted backend re-adopts the
+node and how the UI shows the Auto badge. Auto starts from the current cap
+when it is in band, else applies 2000 MHz. After a Spark reboot the cap is
+gone (stale boot_id) and Auto re-applies it. Choosing any preset or Unlocked
+turns Auto off for that node. The cap is applied with the same
+`sudo nvidia-smi -lgc` rule and marker as the manual presets; every applied
+step is verified against the marker before the UI reports it, failures are
+shown on the panel and logged to Activity, and the last cap stays in place
+until a step succeeds.
+
 ## Quick start
 
 ```bash
