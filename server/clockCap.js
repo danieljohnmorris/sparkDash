@@ -26,10 +26,21 @@ export const NVSMI = "/usr/bin/nvidia-smi";
 /** Marker file on the node, relative to the SSH user's home. */
 export const MARKER_REL_PATH = ".config/sparkdash/gpu-clock-cap";
 
+/**
+ * Sibling marker recording the clock-cap mode. `auto` marks a node whose cap
+ * is managed by the temperature controller (server/clockCapAuto.js); the file
+ * is removed when a preset or Unlocked is chosen, so a restarted backend and
+ * the UI can both see that the node is in Auto.
+ */
+export const AUTO_MODE_REL_PATH = ".config/sparkdash/gpu-clock-mode";
+
 /** Preset caps in MHz (every 100 MHz 1500–2400; stock boost is ~2400). */
 export const CLOCK_CAP_PRESETS = Object.freeze([
   1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400,
 ]);
+
+/** Auto mode never leaves this band (SPARK-6): the sweep's knee is 2200. */
+export const AUTO_CAPS = Object.freeze([1800, 1900, 2000, 2100, 2200]);
 
 const BOOT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -60,6 +71,38 @@ export function revertCapCommand() {
 }
 
 /**
+ * Validate a cap for Auto mode: an integer exactly on the 1800–2200 step
+ * list. Anything else throws — the controller must never command a cap
+ * outside the band, even if its own state is corrupted.
+ * @param {unknown} raw
+ * @returns {number} validated MHz
+ */
+export function parseAutoCap(raw) {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
+  if (!Number.isInteger(n) || !AUTO_CAPS.includes(n)) {
+    throw new Error(
+      `Invalid auto clock cap ${JSON.stringify(raw ?? null)}: must be one of ${AUTO_CAPS.join(", ")} MHz`
+    );
+  }
+  return n;
+}
+
+/**
+ * Mark the node as Auto-managed: a one-line `auto` sibling of the cap marker.
+ * The cap itself stays in gpu-clock-cap, so the restarted backend starts from
+ * the cap that is already applied.
+ */
+export function writeAutoModeCommand() {
+  const dir = path.posix.dirname(AUTO_MODE_REL_PATH);
+  return `mkdir -p ~/${dir} && printf 'auto\\n' > ~/${AUTO_MODE_REL_PATH}`;
+}
+
+/** Clear the Auto marker (a preset / Unlocked choice takes over). */
+export function removeAutoModeCommand() {
+  return `rm -f ~/${AUTO_MODE_REL_PATH}`;
+}
+
+/**
  * Write the marker with the boot_id read on the node itself. `b` is captured
  * in the remote shell; the value is never interpolated server-side.
  */
@@ -75,14 +118,15 @@ export function removeMarkerCommand() {
 }
 
 /**
- * One round trip: marker content, current boot_id, live graphics clock.
- * Sections come back separated by '---'.
+ * One round trip: marker content, current boot_id, live graphics clock, GPU
+ * temperature. Sections come back separated by '---'.
  */
 export function statusCommand() {
   return [
     `cat ~/${MARKER_REL_PATH} 2>/dev/null`,
     "cat /proc/sys/kernel/random/boot_id 2>/dev/null",
     `${NVSMI} --query-gpu=clocks.gr --format=csv,noheader,nounits 2>/dev/null`,
+    `${NVSMI} --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>/dev/null`,
   ].join("; echo '---'; ");
 }
 
@@ -117,6 +161,21 @@ export function parseClocksGr(text) {
 }
 
 /**
+ * Parse `--query-gpu=temperature.gpu --format=csv,noheader,nounits` — first
+ * parseable value (Spark nodes are single-GPU); null when nvidia-smi is
+ * unavailable or the line is [N/A].
+ * @param {string} text
+ * @returns {number | null} GPU temperature in °C
+ */
+export function parseTempC(text) {
+  for (const line of String(text ?? "").split("\n")) {
+    const v = Number.parseFloat(line.trim());
+    if (Number.isFinite(v) && v > 0) return Math.round(v);
+  }
+  return null;
+}
+
+/**
  * Resolve cap status from the three status sections.
  * @param {string} markerText raw marker file content ("" when missing)
  * @param {string} bootIdText current /proc boot_id ("" when unreadable)
@@ -141,10 +200,10 @@ export function resolveCapStatus(markerText, bootIdText, clocksText) {
   };
 }
 
-/** Split the '---'-separated status output into its three sections. */
+/** Split the '---'-separated status output into its sections. */
 export function splitStatusSections(text) {
   const parts = String(text ?? "").split("---");
-  return { marker: parts[0] ?? "", bootId: parts[1] ?? "", clocks: parts[2] ?? "" };
+  return { marker: parts[0] ?? "", bootId: parts[1] ?? "", clocks: parts[2] ?? "", temp: parts[3] ?? "" };
 }
 
 /**
@@ -154,7 +213,7 @@ export function splitStatusSections(text) {
  * on the real node. The local side is execFile with an argv array; the command
  * string only ever contains validated constants.
  */
-async function runOnSpark(spark, cmd, timeoutMs = 12000) {
+export async function runOnSpark(spark, cmd, timeoutMs = 12000) {
   if (!spark.isLocal) {
     return sshExec(spark, cmd, { timeoutMs });
   }
@@ -189,13 +248,21 @@ async function runOnSpark(spark, cmd, timeoutMs = 12000) {
 }
 
 /**
+ * One round trip for the Auto controller: the mode marker, then the full cap
+ * status (marker, boot_id, graphics clock, temperature).
+ */
+export function autoTickCommand() {
+  return `cat ~/${AUTO_MODE_REL_PATH} 2>/dev/null; echo '---'; ${statusCommand()}`;
+}
+
+/**
  * Read the current cap status from a node.
- * @returns {Promise<{ mhz: number | null, stale: boolean, markerMhz: number | null, graphicsClockMHz: number | null }>}
+ * @returns {Promise<{ mhz: number | null, stale: boolean, markerMhz: number | null, graphicsClockMHz: number | null, tempC: number | null }>}
  */
 export async function readClockCapStatus(spark) {
   const text = await runOnSpark(spark, statusCommand());
-  const { marker, bootId, clocks } = splitStatusSections(text);
-  return resolveCapStatus(marker, bootId, clocks);
+  const { marker, bootId, clocks, temp } = splitStatusSections(text);
+  return { ...resolveCapStatus(marker, bootId, clocks), tempC: parseTempC(temp) };
 }
 
 /**
