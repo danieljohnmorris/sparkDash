@@ -345,6 +345,29 @@ Unknown is left out rather than written as zero: a failed GPU read, a sensor tha
 
 ---
 
+## GPU clock cap
+
+`nvidia-smi -lgc 0,<MHz>` locks the max graphics clock, but NVML has no way to
+read that lock back (`clocks.max.*` stays at the hardware max). So whoever sets
+the lock drops a one-line marker on the Spark, and sparkDash shows it as
+`cap 1800 MHz` under the SM clock on the GPU panel, a `Cap 1.8 GHz` chip on the
+Overview card, and `gpu.throttle.clockCapMHz` in the API.
+
+```bash
+# set
+sudo nvidia-smi -lgc 0,1800
+mkdir -p ~/.config/sparkdash
+echo "1800 $(cat /proc/sys/kernel/random/boot_id)" > ~/.config/sparkdash/gpu-clock-cap
+
+# revert
+sudo nvidia-smi -rgc
+rm -f ~/.config/sparkdash/gpu-clock-cap
+```
+
+The marker is read from `/run/sparkdash/gpu-clock-cap` (for a root-run unit)
+or `~/.config/sparkdash/gpu-clock-cap` of the SSH user. The optional boot_id
+makes a stale marker disappear after a reboot, when the lock is gone too.
+
 ## Quick start
 
 ```bash
