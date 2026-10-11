@@ -51,6 +51,7 @@ test("a new WebSocket client receives its initial snapshot without rebroadcastin
       FLEET_ENERGY_JSON_PATH: path.join(tmp, "fleet-energy.json"),
       EVENTS_JSON_PATH: path.join(tmp, "events.json"),
       GPU_HISTORY_JSON_PATH: path.join(tmp, "gpu-history.json"),
+      GPU_HISTORY_LONG_JSON_PATH: path.join(tmp, "gpu-history-long.json"),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

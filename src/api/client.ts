@@ -31,6 +31,9 @@ import type {
   QualityBenchJob,
   QualityBenchListResponse,
   StartQualityBenchRequest,
+  ClockCapSparkStatus,
+  ClockCapApplyResponse,
+  ClockCapModeResponse,
 } from "./types";
 import { authHeaders, reportAuthRequired } from "./authToken";
 
@@ -561,6 +564,42 @@ export function shutdownAllSparks(): Promise<BatchPowerResult> {
 /** Send WoL to all registered Sparks that have a MAC configured. */
 export function wakeAllSparks(): Promise<BatchPowerResult> {
   return apiFetch("/api/sparks/wake-all", { method: "POST" });
+}
+
+// ─── GPU clock cap ───────────────────────────────────────
+/** Per-node clock cap state (marker + live graphics clock). */
+export function fetchClockCap(id?: string): Promise<{ success: boolean; sparks: ClockCapSparkStatus[] }> {
+  const qs = id ? `?id=${encodeURIComponent(id)}` : "";
+  return apiFetch(`/api/sparks/clock-cap${qs}`);
+}
+
+/**
+ * Apply a preset cap (mhz from CLOCK_CAP_PRESETS) or revert to stock
+ * (mhz = null → nvidia-smi -rgc + marker removed). `sparkIds` "all" targets
+ * every node.
+ */
+export function setClockCap(
+  sparkIds: string[] | "all",
+  mhz: number | null
+): Promise<ClockCapApplyResponse> {
+  return apiFetch("/api/sparks/clock-cap", {
+    method: "POST",
+    body: JSON.stringify({ sparkIds, mhz }),
+  });
+}
+
+/**
+ * Turn the Auto clock cap (1800–2200 MHz, temperature-driven) on for the
+ * given targets. Any preset / Unlocked choice turns it back off.
+ */
+export function setClockCapMode(
+  sparkIds: string[] | "all",
+  mode: "auto"
+): Promise<ClockCapModeResponse> {
+  return apiFetch("/api/sparks/clock-cap/mode", {
+    method: "POST",
+    body: JSON.stringify({ sparkIds, mode }),
+  });
 }
 
 // ─── Hermes update preview ───────────────────────────────

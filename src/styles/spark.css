@@ -1046,3 +1046,41 @@
 .sp-chart .legend {
   margin-top: 6px;
 }
+
+/* GPU clock cap panel (SPARK-4) */
+.sp-cap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sp-cap__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.sp-cap__presets {
+  flex-wrap: wrap;
+}
+.sp-cap__presets > button {
+  padding: 4px 9px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.sp-cap__auto {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sp-cap__auto-log {
+  margin: 0;
+  padding: 0 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+  font-size: 11px;
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+}

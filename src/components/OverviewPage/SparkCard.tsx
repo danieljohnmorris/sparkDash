@@ -1,7 +1,8 @@
 import { memo, useState } from "react";
+import type { ReactNode } from "react";
 import type { SparkSnapshot } from "../../api/types";
 import { resolveSparkRole } from "../../api/sparkRole";
-import { usableHead } from "../../shared/sparkHead";
+import { servedModelId, usableHead } from "../../shared/sparkHead";
 import { wakeSpark } from "../../api/client";
 import { backendLabel } from "../../shared/llmBackends";
 import { formatDiskSize, formatMb } from "../../shared/formatBytes";
@@ -67,6 +68,7 @@ function Bar({
 function SparkCardImpl({
   spark,
   headSpark,
+  groupSparks,
   vramContext = null,
   temperatureUnit,
   onSelect,
@@ -74,6 +76,8 @@ function SparkCardImpl({
   spark: SparkSnapshot;
   /** The head this worker serves for (workers only). */
   headSpark?: SparkSnapshot | null;
+  /** The head plus its matching workers, derived once from the fleet snapshot. */
+  groupSparks?: readonly SparkSnapshot[];
   /** Breakdown inputs (see `vramContextFor`); null keeps the plain VRAM bar. */
   vramContext?: VramBreakdownContext | null;
   temperatureUnit: Unit;
@@ -116,7 +120,7 @@ function SparkCardImpl({
   const comfy = spark.comfyMonitoring ? spark.metrics?.comfy : undefined;
   const hermes = spark.hermes;
 
-  const roleText = role === "head" ? "head" : role === "worker" ? "worker" : "standalone";
+  const roleText = role.toUpperCase();
   const roleTitle =
     role === "head"
       ? "Cluster head Spark"
@@ -151,17 +155,25 @@ function SparkCardImpl({
   const headLlmList = Array.isArray(liveHead?.metrics.llm) ? liveHead.metrics.llm : [];
   const headLlm = headLlmList.find((l) => l.available) ?? null;
   if (role === "worker") {
-    // Prefer the head's live model; fall back to the configured / mirrored worker label.
-    const label = headLlm?.modelId || spark.workerLabel?.trim() || spark.workerDerivedLabel?.trim() || null;
+    // Workers only name the live model reported by their head; config labels can go stale.
+    const label = servedModelId(headLlm);
     modelEyebrowRight = headLlm ? formatCtx(headLlm.contextLength) : null;
-    modelText = label ?? (headName ? "No model on head" : "Worker");
-    modelTitle = headName ? `${label ?? "No model"} · worker of ${headName}` : `${label ?? "Distributed"} · LLM worker`;
+    modelText = label ?? (headSpark ? "No model on head" : spark.workerHeadId ? "Head unknown" : "No head set");
+    modelTitle = headName
+      ? `${modelText} · worker of ${headName}`
+      : spark.workerHeadId
+        ? `${modelText} · configured head id not found`
+        : `${modelText} · LLM worker`;
   } else if (llm) {
     // The engine name lives in the tooltip; the row itself is just model + context.
     const engine = backendLabel(llm.backend) ?? llm.backend ?? "LLM";
     modelEyebrowRight = formatCtx(llm.contextLength);
-    modelText = llm.modelId ?? "unknown";
-    modelTitle = llm.modelId ? `${llm.modelId} · ${engine}` : engine;
+    const label = servedModelId(llm) ?? "unknown";
+    modelText = label;
+    modelTitle = llm.modelId || llm.models?.length ? `${label} · ${engine}` : engine;
+  } else {
+    modelText = "No model";
+    modelTitle = "No model loaded";
   }
   // Idle Spark (nothing serving): the launcher block fills the free space instead.
   // Memory or compute in use while nothing serves yet: a model is most likely still loading.
@@ -172,6 +184,28 @@ function SparkCardImpl({
   const showLauncher = role !== "worker" && !llm && spark.llmMonitoring !== false;
 
   const showTps = role !== "worker" && !!llm;
+
+  const groupMembers =
+    role === "head" && groupSparks?.length
+      ? groupSparks.map((member) => {
+          const memberRole = resolveSparkRole(member);
+          return (
+            <li key={member.id}>
+              <span className="ov-group__name" title={member.name}>{member.name}</span>
+              <span className="ov-group__role">{memberRole.toUpperCase()}</span>
+            </li>
+          );
+        })
+      : null;
+  const groupBlock: ReactNode = groupMembers ? (
+    <section className="ov-group" aria-label="Model span">
+      <div className="ov-group__label">
+        Sparks <span>{groupSparks!.length}</span>
+      </div>
+      <code className="ov-group__model">{modelText}</code>
+      <ul>{groupMembers}</ul>
+    </section>
+  ) : null;
   const llmChip = llm
     ? llm.requestsRunning != null
       ? `${llm.requestsRunning} running · ${llm.requestsWaiting ?? 0} queued`
@@ -186,6 +220,11 @@ function SparkCardImpl({
         <Tag tone="warn" title={throttle.detail || "GPU clock throttled"}>
           {throttle.thermal ? "Thermal throttle" : "HW slowdown"}
           {throttle.smClockMHz ? ` · SM ${(throttle.smClockMHz / 1000).toFixed(1)} GHz` : ""}
+        </Tag>
+      ) : null}
+      {online && throttle?.clockCapMHz != null ? (
+        <Tag title="GPU clock locked with nvidia-smi -lgc">
+          Cap {(throttle.clockCapMHz / 1000).toFixed(1)} GHz
         </Tag>
       ) : null}
       {online && llmChip ? <Tag tone={(llm?.requestsRunning ?? llm?.slotsActive ?? 0) > 0 ? "good" : "neutral"}>{llmChip}</Tag> : null}
@@ -232,6 +271,7 @@ function SparkCardImpl({
       </div>
 
       {online ? <HealthChips findings={spark.health} /> : null}
+      {groupBlock}
 
       {!online || !gpu ? (
         <div className="ov-sc__off">
@@ -302,7 +342,7 @@ function SparkCardImpl({
                   {headSpark.name}
                 </AppLink>
               ) : (
-                <div className="ov-launch__title">Head not set</div>
+                <div className="ov-launch__title">{spark.workerHeadId ? "Head unknown" : "Head not set"}</div>
               )}
               <div className="ov-launch__hint">
                 {headLlm

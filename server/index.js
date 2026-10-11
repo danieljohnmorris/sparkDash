@@ -25,6 +25,14 @@ import { getSettings, updateSettings, loadSettings } from "./settings.js";
 import { broadcastForLanIp, effectiveMac, normalizeMac, sendWol } from "./wol.js";
 import { remoteShutdownCommand, spawnLocalShutdown } from "./shutdown.js";
 import {
+  applyClockCap,
+  revertClockCap,
+  readClockCapStatus,
+  parseClockCap,
+  CLOCK_CAP_PRESETS,
+} from "./clockCap.js";
+import { ClockCapAutoController } from "./clockCapAuto.js";
+import {
   decodeBenchManager,
   DECODE_BENCH_DEFAULTS,
   normalizeConcurrencies,
@@ -301,8 +309,18 @@ const eventLog = new EventLog({
 });
 
 // ─── GPU history (so a fresh page can draw the last hours at once) ─────
+// Two stores: the dense one keeps every ~2 s sample for the short Overview/Spark charts
+// (8 h), the long one keeps a minute-resolution series for a week so the Temps page can
+// draw day and week ranges without storing a week of 2 s samples.
+const GPU_HISTORY_DENSE_WINDOW_MS = 8 * 3600_000;
+const GPU_HISTORY_MAX_WINDOW_MS = 7 * 24 * 3600_000;
 const gpuHistory = new GpuHistory({
   file: process.env.GPU_HISTORY_JSON_PATH || path.join(ROOT, "config", "gpu-history.json"),
+});
+const gpuHistoryLong = new GpuHistory({
+  file: process.env.GPU_HISTORY_LONG_JSON_PATH || path.join(ROOT, "config", "gpu-history-long.json"),
+  maxAgeMs: GPU_HISTORY_MAX_WINDOW_MS,
+  minGapMs: 60_000,
 });
 const GPU_HISTORY_SAMPLE_MS = 2000;
 function sampleGpuHistory() {
@@ -314,7 +332,10 @@ function sampleGpuHistory() {
       const draw = gpu.power?.draw;
       const limit = gpu.power?.limit;
       const powerPct = Number.isFinite(draw) && Number.isFinite(limit) && limit > 0 ? Math.min(100, (draw / limit) * 100) : null;
-      gpuHistory.record(snap.id, Date.now(), gpu.usage, gpu.temperature, powerPct, deviceReadings(gpu.gpus));
+      const devices = deviceReadings(gpu.gpus);
+      const at = Date.now();
+      gpuHistory.record(snap.id, at, gpu.usage, gpu.temperature, powerPct, devices);
+      gpuHistoryLong.record(snap.id, at, gpu.usage, gpu.temperature, powerPct, devices);
     }
   } catch {
     /* sampling must never break the server */
@@ -323,6 +344,7 @@ function sampleGpuHistory() {
 const gpuHistoryTimer = setInterval(sampleGpuHistory, GPU_HISTORY_SAMPLE_MS);
 gpuHistoryTimer.unref?.();
 gpuHistory.start();
+gpuHistoryLong.start();
 
 /** Record an event; never throws (callers sit in poll loops and routes). */
 function recordEvent(event) {
@@ -333,6 +355,12 @@ function recordEvent(event) {
     return null;
   }
 }
+
+// ─── Auto clock cap controller (SPARK-6) ─────────────────
+// One loop over all nodes in Auto mode: polls each node's GPU temp every ~10 s
+// and steps the cap 1800–2200 MHz by 100 MHz with 72/67 °C hysteresis (see
+// server/clockCapAuto.js). Shares the clock-cap routes' sudoers rule.
+const clockCapAuto = new ClockCapAutoController({ onEvent: (event) => recordEvent(event) });
 
 for (const [mgr] of [[decodeBenchManager], [prefillBenchManager], [qualityBenchManager]]) {
   mgr.setEventSink((kind, job) => {
@@ -688,6 +716,7 @@ app.delete("/api/sparks/:id", (req, res) => {
     launcherManager.removeSpark(req.params.id);
     launcherStatusCache.delete(req.params.id);
     gpuHistory.remove(req.params.id);
+    gpuHistoryLong.remove(req.params.id);
     toolEvalManager.removeSpark(req.params.id);
     recordEvent({
       type: "spark.removed",
@@ -740,10 +769,13 @@ app.put("/api/settings", (req, res) => {
 });
 
 // Recent GPU utilization / temperature / power % for one Spark (parallel arrays), newest last.
+// Windows up to 8 h come from the dense ~2 s series; longer windows (Temps day/week) come
+// from the minute-resolution long-retention series.
 app.get("/api/sparks/:id/gpu-history", (req, res) => {
   if (!registry.getSpark(req.params.id)) return res.status(404).json({ error: "Spark not found" });
-  const windowMs = Math.min(8 * 3600_000, Math.max(60_000, Number(req.query.windowMs) || 8 * 3600_000));
-  res.json(gpuHistory.get(req.params.id, Date.now() - windowMs));
+  const windowMs = Math.min(GPU_HISTORY_MAX_WINDOW_MS, Math.max(60_000, Number(req.query.windowMs) || 8 * 3600_000));
+  const store = windowMs > GPU_HISTORY_DENSE_WINDOW_MS ? gpuHistoryLong : gpuHistory;
+  res.json(store.get(req.params.id, Date.now() - windowMs));
 });
 
 app.get("/api/sparks/:id/metrics", (req, res) => {
@@ -2129,6 +2161,156 @@ app.post("/api/sparks/:id/wake", async (req, res) => {
   }
 });
 
+// ─── GPU clock cap ───────────────────────────────────────
+// Set/revert the GPU clock cap on Spark nodes through the narrow sudoers rule
+// (nvidia-smi -lgc / -rgc only — see server/clockCap.js). Status reads the
+// per-node marker ~/.config/sparkdash/gpu-clock-cap and the live graphics
+// clock from nvidia-smi --query-gpu=clocks.gr.
+app.get("/api/sparks/clock-cap", async (req, res) => {
+  try {
+    const targets = req.query.id
+      ? [registry.getSpark(String(req.query.id))].filter(Boolean)
+      : registry.sparks;
+    if (req.query.id && targets.length === 0) {
+      return res.status(404).json({ error: "Spark not found" });
+    }
+    const sparks = await Promise.all(
+      targets.map(async (spark) => {
+        try {
+          const status = await readClockCapStatus(spark);
+          return {
+            id: spark.id,
+            name: spark.name,
+            ok: true,
+            ...status,
+            auto: clockCapAuto.publicState(spark.id),
+          };
+        } catch (err) {
+          return { id: spark.id, name: spark.name, ok: false, error: err.message || String(err) };
+        }
+      })
+    );
+    res.json({ success: true, sparks });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/sparks/clock-cap", async (req, res) => {
+  // Validate before touching any node: mhz must be an exact preset integer, or
+  // null/absent-with-explicit-unlock for the revert. Out-of-list and
+  // non-integer values are rejected here, server-side.
+  const raw = req.body?.mhz;
+  const unlocking = raw === null || raw === "unlocked";
+  let mhz = null;
+  if (!unlocking) {
+    try {
+      mhz = parseClockCap(raw);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+  }
+
+  const bodyIds = req.body?.sparkIds;
+  const all = bodyIds === "all" || !Array.isArray(bodyIds) || bodyIds.length === 0;
+  const targets = all
+    ? registry.sparks
+    : bodyIds.map((id) => registry.getSpark(String(id))).filter(Boolean);
+  if (targets.length === 0) {
+    return res.status(400).json({ error: "No matching Sparks" });
+  }
+
+  const limiterKey = principalKey(req);
+  if (!allowDestructive(limiterKey) || !allowGlobalDestructive(clientKey(req))) {
+    return rejectLimited(res, "Too many clock-cap requests; try again shortly");
+  }
+
+  const results = [];
+  for (const spark of targets) {
+    const entry = { id: spark.id, name: spark.name };
+    try {
+      // A preset / Unlocked choice turns Auto off for that node first, so the
+      // controller never fights the manual cap (SPARK-6).
+      if (clockCapAuto.isEnabled(spark.id)) await clockCapAuto.disable(spark);
+      const status = unlocking ? await revertClockCap(spark) : await applyClockCap(spark, mhz);
+      results.push({
+        ...entry,
+        ok: true,
+        mhz: status.mhz,
+        stale: status.stale,
+        graphicsClockMHz: status.graphicsClockMHz,
+      });
+      recordEvent({
+        type: unlocking ? "gpu.clockcap.unlocked" : "gpu.clockcap.applied",
+        severity: "info",
+        sparkId: spark.id,
+        sparkName: spark.name,
+        message: unlocking
+          ? `Clock cap removed (Unlocked) on ${spark.name || spark.id}`
+          : `Clock cap set to ${mhz} MHz on ${spark.name || spark.id}`,
+      });
+    } catch (err) {
+      const msg = err.message || String(err);
+      results.push({ ...entry, ok: false, error: msg });
+      recordEvent({
+        type: "gpu.clockcap.failed",
+        severity: "error",
+        sparkId: spark.id,
+        sparkName: spark.name,
+        message: `Clock cap failed on ${spark.name || spark.id}: ${msg.split("\n")[0].slice(0, 120)}`,
+      });
+    }
+  }
+  eventLog.flush();
+  res.json({ success: true, mhz: unlocking ? null : mhz, results });
+});
+
+/** Preset list for the UI — a single source of truth with server/clockCap.js. */
+app.get("/api/sparks/clock-cap/presets", (_req, res) => {
+  res.json({ presets: CLOCK_CAP_PRESETS });
+});
+
+// ─── Auto clock cap mode (SPARK-6) ───────────────────────
+// Turn the temperature-driven cap controller on for a node or All Sparks. The
+// cap itself keeps using the narrow sudoers rule; Auto only decides when to
+// step it (server/clockCapAuto.js).
+app.post("/api/sparks/clock-cap/mode", async (req, res) => {
+  if (req.body?.mode !== "auto") {
+    return res.status(400).json({ error: "mode must be \"auto\"" });
+  }
+  const bodyIds = req.body?.sparkIds;
+  const all = bodyIds === "all" || !Array.isArray(bodyIds) || bodyIds.length === 0;
+  const targets = all
+    ? registry.sparks
+    : bodyIds.map((id) => registry.getSpark(String(id))).filter(Boolean);
+  if (targets.length === 0) {
+    return res.status(400).json({ error: "No matching Sparks" });
+  }
+  if (!allowDestructive(principalKey(req)) || !allowGlobalDestructive(clientKey(req))) {
+    return rejectLimited(res, "Too many clock-cap requests; try again shortly");
+  }
+  const results = [];
+  for (const spark of targets) {
+    const entry = { id: spark.id, name: spark.name };
+    try {
+      const started = await clockCapAuto.enable(spark);
+      results.push({ ...entry, ok: true, ...started });
+    } catch (err) {
+      const msg = err.message || String(err);
+      results.push({ ...entry, ok: false, error: msg });
+      recordEvent({
+        type: "gpu.clockcap.auto.failed",
+        severity: "error",
+        sparkId: spark.id,
+        sparkName: spark.name,
+        message: `Auto clock cap failed on ${spark.name || spark.id}: ${msg.split("\n")[0].slice(0, 120)}`,
+      });
+    }
+  }
+  eventLog.flush();
+  res.json({ success: true, mode: "auto", results });
+});
+
 // ─── Prometheus exposition (opt-in) ──────────────────────
 // Registered after the auth middleware (a token-protected install needs the
 // scraper's bearer token) and before the SPA fallback, which would otherwise
@@ -2311,6 +2493,8 @@ if (!startupPreflight.fatal) {
     startAllMonitors();
     fleetEnergyRuntime.start();
     llmTokenRuntime.start();
+    // Re-adopt Auto nodes from their gpu-clock-mode markers, then tick.
+    clockCapAuto.start(registry);
   });
 } else {
   process.exitCode = 1;
@@ -2343,6 +2527,7 @@ async function shutdown(signal) {
   } catch (err) {
     console.error("[sparkDash] failed to stop launcher watchers:", err.message);
   }
+  clockCapAuto.stop();
   try {
     eventLog.flush();
   } catch (err) {
@@ -2351,6 +2536,7 @@ async function shutdown(signal) {
   try {
     clearInterval(gpuHistoryTimer);
     gpuHistory.stop();
+    gpuHistoryLong.stop();
   } catch (err) {
     console.error("[sparkDash] failed to flush GPU history:", err.message);
   }

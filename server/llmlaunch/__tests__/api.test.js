@@ -35,6 +35,7 @@ async function startServer(t) {
       FLEET_ENERGY_JSON_PATH: path.join(tmp, "fleet-energy.json"),
       EVENTS_JSON_PATH: path.join(tmp, "events.json"),
       GPU_HISTORY_JSON_PATH: path.join(tmp, "gpu-history.json"),
+      GPU_HISTORY_LONG_JSON_PATH: path.join(tmp, "gpu-history-long.json"),
       LLM_LAUNCHERS_JSON_PATH: path.join(tmp, "llm-launchers.json"),
     },
     stdio: ["ignore", "pipe", "pipe"],

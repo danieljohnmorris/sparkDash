@@ -48,3 +48,8 @@ export function headFor<T extends HeadUnitLike>(
 export function usableHead<T extends HeadUnitLike>(head: T | null | undefined): T | null {
   return head && head.online !== false ? head : null;
 }
+
+/** The first id reported by a live LLM endpoint (`modelId`, falling back to `/v1/models`). */
+export function servedModelId(llm: { modelId?: string | null; models?: string[] } | null | undefined): string | null {
+  return llm?.modelId ?? llm?.models?.[0] ?? null;
+}

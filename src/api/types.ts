@@ -191,6 +191,9 @@ export interface GpuThrottle {
   smClockMaxMHz: number | null;
   /** Current SM clock as % of max (0–100). null when clocks unavailable. */
   smClockPct: number | null;
+  /** Max graphics clock locked with `nvidia-smi -lgc` (MHz), from the sparkdash
+   *  gpu-clock-cap marker on the host. null/absent when no lock is recorded. */
+  clockCapMHz?: number | null;
   /** Human-readable active reasons (tooltip). */
   detail: string;
 }
@@ -1471,4 +1474,82 @@ export class ToolEvalApiError extends Error {
     this.errors = errors;
     this.active = active;
   }
+}
+
+// ─── GPU clock cap ───────────────────────────────────────
+/** Per-node clock-cap state (marker ~/.config/sparkdash/gpu-clock-cap + live clocks.gr). */
+export interface ClockCapSparkStatus {
+  id: string;
+  name: string;
+  ok: boolean;
+  /** Effective cap in MHz, or null for stock / Unlocked. */
+  mhz: number | null;
+  /** True when a marker from an earlier boot exists (reboot cleared the cap). */
+  stale: boolean;
+  /** The stale marker's MHz, shown as an explanation only. */
+  markerMhz?: number | null;
+  /** Live graphics clock from nvidia-smi --query-gpu=clocks.gr. */
+  graphicsClockMHz: number | null;
+  /** GPU temperature in °C from the same status read. */
+  tempC?: number | null;
+  /** Temperature-controller state; null when the node is not in Auto. */
+  auto?: ClockCapAutoState | null;
+  error?: string;
+}
+
+/** One applied Auto step (newest first in the log). */
+export interface ClockCapAutoStep {
+  at: number;
+  /** Cap before the step; null when Auto (re)started from stock. */
+  from: number | null;
+  to: number;
+  tempC: number | null;
+  dir: "down" | "up";
+}
+
+/** Auto (1800–2200 MHz) controller state for one node. */
+export interface ClockCapAutoState {
+  enabled: boolean;
+  /** Cap the controller last applied (MHz). */
+  cap: number | null;
+  /** Last polled GPU temperature (°C). */
+  lastTempC: number | null;
+  lastStep: ClockCapAutoStep | null;
+  /** Newest first, capped at ~20 entries. */
+  log: ClockCapAutoStep[];
+  /** Last controller/apply failure for this node, or null. */
+  lastError: string | null;
+}
+
+export interface ClockCapResult {
+  id: string;
+  name: string;
+  ok: boolean;
+  mhz?: number | null;
+  stale?: boolean;
+  graphicsClockMHz?: number | null;
+  error?: string;
+}
+
+export interface ClockCapApplyResponse {
+  success: boolean;
+  mhz: number | null;
+  results: ClockCapResult[];
+}
+
+export interface ClockCapModeResult {
+  id: string;
+  name: string;
+  ok: boolean;
+  /** Cap Auto starts from (current in-band cap, else 2000). */
+  cap?: number;
+  tempC?: number | null;
+  graphicsClockMHz?: number | null;
+  error?: string;
+}
+
+export interface ClockCapModeResponse {
+  success: boolean;
+  mode: "auto";
+  results: ClockCapModeResult[];
 }

@@ -345,6 +345,63 @@ Unknown is left out rather than written as zero: a failed GPU read, a sensor tha
 
 ---
 
+## GPU clock cap
+
+`nvidia-smi -lgc 0,<MHz>` locks the max graphics clock, but NVML has no way to
+read that lock back (`clocks.max.*` stays at the hardware max). So whoever sets
+the lock drops a one-line marker on the Spark, and sparkDash shows it as
+`cap 1800 MHz` under the SM clock on the GPU panel, a `Cap 1.8 GHz` chip on the
+Overview card, and `gpu.throttle.clockCapMHz` in the API.
+
+```bash
+# set
+sudo nvidia-smi -lgc 0,1800
+mkdir -p ~/.config/sparkdash
+echo "1800 $(cat /proc/sys/kernel/random/boot_id)" > ~/.config/sparkdash/gpu-clock-cap
+
+# revert
+sudo nvidia-smi -rgc
+rm -f ~/.config/sparkdash/gpu-clock-cap
+```
+
+The marker is read from `/run/sparkdash/gpu-clock-cap` (for a root-run unit)
+or `~/.config/sparkdash/gpu-clock-cap` of the SSH user. The optional boot_id
+makes a stale marker disappear after a reboot, when the lock is gone too.
+
+### Auto mode (1800–2200 MHz by temperature)
+
+The **Auto 1800–2200** button in the clock cap panel hands the cap to a
+backend controller (`server/clockCapAuto.js`). One loop ticks every Auto node
+roughly every 10 s (one SSH round trip per node) and steps the cap 100 MHz
+within 1800–2200 MHz:
+
+- **step down** when the GPU reaches 72 °C — immediately, without the dwell,
+  from 77 °C while the temperature is still rising;
+- **step up** when it drops to 67 °C or below;
+- **hold** between 67 and 72, and never step more than once a minute per node
+  (the dwell; the 77 °C fast path above is the only exception).
+
+Thresholds and cadence are env-configurable, never hardcoded in the UI:
+
+```bash
+SPARKDASH_CLOCK_AUTO_HIGH_C=72    # step-down ("hold") threshold, °C
+SPARKDASH_CLOCK_AUTO_LOW_C=67     # step-up ("release") threshold, °C
+SPARKDASH_CLOCK_AUTO_HOT_C=77    # dwell-skipping fast path, °C
+SPARKDASH_CLOCK_AUTO_POLL_MS=10000
+SPARKDASH_CLOCK_AUTO_DWELL_MS=60000
+```
+
+A node in Auto keeps a `~/.config/sparkdash/gpu-clock-mode` file containing
+`auto`, next to the cap marker — that is how a restarted backend re-adopts the
+node and how the UI shows the Auto badge. Auto starts from the current cap
+when it is in band, else applies 2000 MHz. After a Spark reboot the cap is
+gone (stale boot_id) and Auto re-applies it. Choosing any preset or Unlocked
+turns Auto off for that node. The cap is applied with the same
+`sudo nvidia-smi -lgc` rule and marker as the manual presets; every applied
+step is verified against the marker before the UI reports it, failures are
+shown on the panel and logged to Activity, and the last cap stays in place
+until a step succeeds.
+
 ## Quick start
 
 ```bash
@@ -478,7 +535,7 @@ sparkDash/
 | GET | `/api/fleet-energy` | Estimated fleet watts, rolling energy, coverage, and Wh/output-token |
 | GET | `/api/fleet-energy/history` | Hourly / daily energy buckets for the Fleet energy page |
 | GET | `/api/llm-token-totals` · `/api/llm-token-totals/history` | Cumulative LLM tokens by model, and the hourly / daily history behind the Token totals page |
-| GET | `/api/sparks/:id/gpu-history` | Last hours of GPU utilization, temperature and power % (`windowMs`, up to 8 h; parallel arrays) |
+| GET | `/api/sparks/:id/gpu-history` | GPU utilization, temperature and power % (`windowMs`; up to 8 h at ~2 s resolution, up to 7 days at minute resolution from the long-retention store; parallel arrays) |
 | GET | `/api/events` | Fleet event log (`limit`, `sparkId`, `sinceId`, `beforeId`; 2000 kept) |
 | GET/POST/PUT/DELETE | `/api/sparks/:id/llm-launchers[/:lid]` | Registered start.sh / stop.sh model launchers; `POST …/:lid/start` and `…/stop` run them, `GET …/jobs/:jobId` streams the shell output |
 | GET/POST/DELETE | `/api/sparks/:id/tool-eval/…` | Tool Eval Bench on a Spark: `status`, `install`, `preview`, `probe`, `runs` (start / list / stream / attach / stop / refresh / `result` / delete); `GET /api/tool-eval/spec` serves the option spec |

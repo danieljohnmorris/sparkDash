@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { OverviewPage } from "./OverviewPage";
+import { makeSpark } from "../../testing/fixtures";
 import { render } from "../../testing/render";
 import type { SparkSnapshot } from "../../api/types";
 
@@ -44,6 +45,32 @@ function barLabels(container: HTMLElement): string[] {
 }
 
 describe("Overview card", () => {
+  it("shows a two-node model span and its standalone from API fixtures", () => {
+    const head = makeSpark("head");
+    const worker = { ...makeSpark("worker"), role: "worker", workerNode: true, workerHeadId: "head" } as SparkSnapshot;
+    const standalone = { ...makeSpark("standalone"), role: "standalone" } as SparkSnapshot;
+    const { container } = render(<OverviewPage sparks={[head, worker, standalone]} />);
+
+    const headCard = [...container.querySelectorAll(".ov-sc")].find((card) => card.textContent?.includes("Spark head"))!;
+    expect(headCard.textContent).toContain("fixture-model");
+    expect(headCard.textContent).toContain("Spark worker");
+    expect(headCard.textContent).toContain("HEAD");
+    expect(headCard.textContent).toContain("WORKER");
+    const standaloneCard = [...container.querySelectorAll(".ov-sc")].find((card) => card.textContent?.includes("Spark standalone"))!;
+    expect(standaloneCard.textContent).toContain("fixture-model");
+    expect(standaloneCard.textContent).toContain("STANDALONE");
+  });
+
+  it("groups a three-node pair without inventing topology", () => {
+    const head = makeSpark("head");
+    const workers = ["worker-1", "worker-2"].map((id) => ({ ...makeSpark(id), role: "worker", workerNode: true, workerHeadId: "head" })) as SparkSnapshot[];
+    const { container } = render(<OverviewPage sparks={[head, ...workers]} />);
+    const headCard = [...container.querySelectorAll(".ov-sc")].find((card) => card.textContent?.includes("Spark head"))!;
+    expect(headCard.textContent).toContain("Spark worker-1");
+    expect(headCard.textContent).toContain("Spark worker-2");
+    expect(headCard.textContent!.match(/WORKER/g)).toHaveLength(2);
+  });
+
   it("names each bar for what it measures", () => {
     const { container } = render(<OverviewPage sparks={[host({ cpuTemp: 51 })]} />);
     expect(barLabels(container)).toEqual(["VRAM", "GPU", "RAM", "GPU temp", "GPU power"]);
