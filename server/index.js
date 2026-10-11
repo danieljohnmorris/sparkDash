@@ -301,8 +301,18 @@ const eventLog = new EventLog({
 });
 
 // ─── GPU history (so a fresh page can draw the last hours at once) ─────
+// Two stores: the dense one keeps every ~2 s sample for the short Overview/Spark charts
+// (8 h), the long one keeps a minute-resolution series for a week so the Temps page can
+// draw day and week ranges without storing a week of 2 s samples.
+const GPU_HISTORY_DENSE_WINDOW_MS = 8 * 3600_000;
+const GPU_HISTORY_MAX_WINDOW_MS = 7 * 24 * 3600_000;
 const gpuHistory = new GpuHistory({
   file: process.env.GPU_HISTORY_JSON_PATH || path.join(ROOT, "config", "gpu-history.json"),
+});
+const gpuHistoryLong = new GpuHistory({
+  file: process.env.GPU_HISTORY_LONG_JSON_PATH || path.join(ROOT, "config", "gpu-history-long.json"),
+  maxAgeMs: GPU_HISTORY_MAX_WINDOW_MS,
+  minGapMs: 60_000,
 });
 const GPU_HISTORY_SAMPLE_MS = 2000;
 function sampleGpuHistory() {
@@ -314,7 +324,10 @@ function sampleGpuHistory() {
       const draw = gpu.power?.draw;
       const limit = gpu.power?.limit;
       const powerPct = Number.isFinite(draw) && Number.isFinite(limit) && limit > 0 ? Math.min(100, (draw / limit) * 100) : null;
-      gpuHistory.record(snap.id, Date.now(), gpu.usage, gpu.temperature, powerPct, deviceReadings(gpu.gpus));
+      const devices = deviceReadings(gpu.gpus);
+      const at = Date.now();
+      gpuHistory.record(snap.id, at, gpu.usage, gpu.temperature, powerPct, devices);
+      gpuHistoryLong.record(snap.id, at, gpu.usage, gpu.temperature, powerPct, devices);
     }
   } catch {
     /* sampling must never break the server */
@@ -323,6 +336,7 @@ function sampleGpuHistory() {
 const gpuHistoryTimer = setInterval(sampleGpuHistory, GPU_HISTORY_SAMPLE_MS);
 gpuHistoryTimer.unref?.();
 gpuHistory.start();
+gpuHistoryLong.start();
 
 /** Record an event; never throws (callers sit in poll loops and routes). */
 function recordEvent(event) {
@@ -688,6 +702,7 @@ app.delete("/api/sparks/:id", (req, res) => {
     launcherManager.removeSpark(req.params.id);
     launcherStatusCache.delete(req.params.id);
     gpuHistory.remove(req.params.id);
+    gpuHistoryLong.remove(req.params.id);
     toolEvalManager.removeSpark(req.params.id);
     recordEvent({
       type: "spark.removed",
@@ -740,10 +755,13 @@ app.put("/api/settings", (req, res) => {
 });
 
 // Recent GPU utilization / temperature / power % for one Spark (parallel arrays), newest last.
+// Windows up to 8 h come from the dense ~2 s series; longer windows (Temps day/week) come
+// from the minute-resolution long-retention series.
 app.get("/api/sparks/:id/gpu-history", (req, res) => {
   if (!registry.getSpark(req.params.id)) return res.status(404).json({ error: "Spark not found" });
-  const windowMs = Math.min(8 * 3600_000, Math.max(60_000, Number(req.query.windowMs) || 8 * 3600_000));
-  res.json(gpuHistory.get(req.params.id, Date.now() - windowMs));
+  const windowMs = Math.min(GPU_HISTORY_MAX_WINDOW_MS, Math.max(60_000, Number(req.query.windowMs) || 8 * 3600_000));
+  const store = windowMs > GPU_HISTORY_DENSE_WINDOW_MS ? gpuHistoryLong : gpuHistory;
+  res.json(store.get(req.params.id, Date.now() - windowMs));
 });
 
 app.get("/api/sparks/:id/metrics", (req, res) => {
@@ -2351,6 +2369,7 @@ async function shutdown(signal) {
   try {
     clearInterval(gpuHistoryTimer);
     gpuHistory.stop();
+    gpuHistoryLong.stop();
   } catch (err) {
     console.error("[sparkDash] failed to flush GPU history:", err.message);
   }
