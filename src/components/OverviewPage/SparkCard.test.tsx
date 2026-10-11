@@ -66,30 +66,26 @@ describe("SparkCard", () => {
     expect(container.textContent).toContain("Head is offline");
   });
 
-  it("shows the derived head model and every member with its role", () => {
-    const workerTwo = { ...worker(), id: "w2", name: "Spark w2" } as SparkSnapshot;
+  it("shows the head model in the eyebrow but no SPARKS overview box", () => {
     const { container } = render(
-      <SparkCard spark={head(true)} groupSparks={[head(true), worker(), workerTwo]} temperatureUnit="celsius" />,
+      <SparkCard spark={head(true)} temperatureUnit="celsius" />,
     );
-    const group = container.querySelector<HTMLElement>(".ov-group")!;
-    expect(group).not.toBeNull();
-    expect(group.textContent).toContain("Spark h");
-    expect(group.textContent).toContain("Spark w");
-    expect(group.textContent).toContain("Spark w2");
-    expect(group.textContent).toContain("big-model");
-    expect(group.textContent).toContain("HEAD");
-    expect(group.textContent).toContain("WORKER");
-    expect(group.textContent!.match(/WORKER/g)).toHaveLength(2);
+    expect(container.querySelector<HTMLElement>(".ov-group")).toBeNull();
+    expect(container.textContent).not.toContain("Spark w2");
+    // SPARK-1's model info stays on the card itself (eyebrow row).
+    expect(container.textContent).toContain("big-model");
+    expect(container.textContent).toContain("HEAD");
   });
 
   it("shows a worker with an unmatched configured head as unknown", () => {
     const { container } = render(<SparkCard spark={worker()} headSpark={null} temperatureUnit="celsius" />);
     expect(container.textContent).toContain("Head unknown");
-    expect(container.textContent).toContain("No model on head");
   });
 
   it("uses the first served model id when modelId is absent", () => {
-    const { container } = render(<SparkCard spark={headWithModel(["models-fallback"])} temperatureUnit="celsius" />);
+    const { container } = render(
+      <SparkCard spark={headWithModel(["models-fallback"], null)} temperatureUnit="celsius" />,
+    );
     expect(container.textContent).toContain("models-fallback");
   });
 });

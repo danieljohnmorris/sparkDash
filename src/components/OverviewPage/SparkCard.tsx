@@ -1,5 +1,4 @@
 import { memo, useState } from "react";
-import type { ReactNode } from "react";
 import type { SparkSnapshot } from "../../api/types";
 import { resolveSparkRole } from "../../api/sparkRole";
 import { servedModelId, usableHead } from "../../shared/sparkHead";
@@ -68,7 +67,6 @@ function Bar({
 function SparkCardImpl({
   spark,
   headSpark,
-  groupSparks,
   vramContext = null,
   temperatureUnit,
   onSelect,
@@ -76,8 +74,6 @@ function SparkCardImpl({
   spark: SparkSnapshot;
   /** The head this worker serves for (workers only). */
   headSpark?: SparkSnapshot | null;
-  /** The head plus its matching workers, derived once from the fleet snapshot. */
-  groupSparks?: readonly SparkSnapshot[];
   /** Breakdown inputs (see `vramContextFor`); null keeps the plain VRAM bar. */
   vramContext?: VramBreakdownContext | null;
   temperatureUnit: Unit;
@@ -185,27 +181,6 @@ function SparkCardImpl({
 
   const showTps = role !== "worker" && !!llm;
 
-  const groupMembers =
-    role === "head" && groupSparks?.length
-      ? groupSparks.map((member) => {
-          const memberRole = resolveSparkRole(member);
-          return (
-            <li key={member.id}>
-              <span className="ov-group__name" title={member.name}>{member.name}</span>
-              <span className="ov-group__role">{memberRole.toUpperCase()}</span>
-            </li>
-          );
-        })
-      : null;
-  const groupBlock: ReactNode = groupMembers ? (
-    <section className="ov-group" aria-label="Model span">
-      <div className="ov-group__label">
-        Sparks <span>{groupSparks!.length}</span>
-      </div>
-      <code className="ov-group__model">{modelText}</code>
-      <ul>{groupMembers}</ul>
-    </section>
-  ) : null;
   const llmChip = llm
     ? llm.requestsRunning != null
       ? `${llm.requestsRunning} running · ${llm.requestsWaiting ?? 0} queued`
@@ -271,7 +246,6 @@ function SparkCardImpl({
       </div>
 
       {online ? <HealthChips findings={spark.health} /> : null}
-      {groupBlock}
 
       {!online || !gpu ? (
         <div className="ov-sc__off">

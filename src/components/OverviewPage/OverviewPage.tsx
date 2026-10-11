@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { SparkSnapshot } from "../../api/types";
-import { isWorkerSpark, resolveSparkRole } from "../../api/sparkRole";
+import { isWorkerSpark } from "../../api/sparkRole";
 import { updateAllHermes, wakeAllSparks } from "../../api/client";
 import { ShutdownAll } from "../ShutdownAll";
 import { FleetEnergyCard } from "./FleetEnergyCard";
@@ -12,7 +12,7 @@ import { SparkCard } from "./SparkCard";
 import { ActivityFeed } from "./ActivityFeed";
 import { ActivityIcon, PowerOnIcon, RotateIcon } from "../ui/icons";
 import { formatMb } from "../../shared/formatBytes";
-import { vramContextFor } from "../../shared/vramBreakdown";
+import { vramContextFor, type VramBreakdownContext } from "../../shared/vramBreakdown";
 import { makeHeadResolver } from "../../shared/sparkHead";
 import "../../styles/overview.css";
 
@@ -68,19 +68,12 @@ export function OverviewPage({
   // Head lookup and VRAM contexts for the whole fleet in one pass (not one scan per card).
   const cardContext = useMemo(() => {
     const resolveHead = makeHeadResolver(sparks);
-    const byId = new Map<string, { head: SparkSnapshot | null; vram: ReturnType<typeof vramContextFor> | null; group?: SparkSnapshot[] }>();
+    const byId = new Map<string, { head: SparkSnapshot | null; vram: VramBreakdownContext | null }>();
     for (const spark of sparks) {
       byId.set(spark.id, {
         head: resolveHead(spark),
         vram: showVramBreakdown ? vramContextFor(spark, sparks, resolveHead) : null,
-        group: resolveSparkRole(spark) === "head" ? [spark] : undefined,
       });
-    }
-    for (const spark of sparks) {
-      if (resolveSparkRole(spark) !== "worker") continue;
-      const head = resolveHead(spark);
-      const group = head && byId.get(head.id)?.group;
-      group?.push(spark);
     }
     return byId;
   }, [sparks, showVramBreakdown]);
@@ -322,7 +315,6 @@ export function OverviewPage({
                 key={spark.id}
                 spark={spark}
                 headSpark={ctx?.head ?? null}
-                groupSparks={ctx?.group}
                 vramContext={ctx?.vram ?? null}
                 temperatureUnit={temperatureUnit}
                 onSelect={onSelectSpark}

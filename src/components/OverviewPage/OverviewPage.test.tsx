@@ -45,30 +45,25 @@ function barLabels(container: HTMLElement): string[] {
 }
 
 describe("Overview card", () => {
-  it("shows a two-node model span and its standalone from API fixtures", () => {
-    const head = makeSpark("head");
+  it("renders no SPARKS overview box; model info stays on each card", () => {
+    const head = { ...makeSpark("head"), role: "head" } as SparkSnapshot;
     const worker = { ...makeSpark("worker"), role: "worker", workerNode: true, workerHeadId: "head" } as SparkSnapshot;
     const standalone = { ...makeSpark("standalone"), role: "standalone" } as SparkSnapshot;
     const { container } = render(<OverviewPage sparks={[head, worker, standalone]} />);
 
+    // SPARK-5: the duplicate SPARKS box (model + HEAD/WORKER node list) is gone.
+    expect(container.querySelector<HTMLElement>(".ov-group")).toBeNull();
     const headCard = [...container.querySelectorAll(".ov-sc")].find((card) => card.textContent?.includes("Spark head"))!;
+    expect(headCard.textContent).not.toContain("Spark worker");
+    // SPARK-1's per-card model info survives: head, worker and standalone each name the model.
     expect(headCard.textContent).toContain("fixture-model");
-    expect(headCard.textContent).toContain("Spark worker");
     expect(headCard.textContent).toContain("HEAD");
-    expect(headCard.textContent).toContain("WORKER");
+    const workerCard = [...container.querySelectorAll(".ov-sc")].find((card) => card.textContent?.includes("Spark worker"))!;
+    expect(workerCard.textContent).toContain("fixture-model");
+    expect(workerCard.textContent).toContain("WORKER");
     const standaloneCard = [...container.querySelectorAll(".ov-sc")].find((card) => card.textContent?.includes("Spark standalone"))!;
     expect(standaloneCard.textContent).toContain("fixture-model");
     expect(standaloneCard.textContent).toContain("STANDALONE");
-  });
-
-  it("groups a three-node pair without inventing topology", () => {
-    const head = makeSpark("head");
-    const workers = ["worker-1", "worker-2"].map((id) => ({ ...makeSpark(id), role: "worker", workerNode: true, workerHeadId: "head" })) as SparkSnapshot[];
-    const { container } = render(<OverviewPage sparks={[head, ...workers]} />);
-    const headCard = [...container.querySelectorAll(".ov-sc")].find((card) => card.textContent?.includes("Spark head"))!;
-    expect(headCard.textContent).toContain("Spark worker-1");
-    expect(headCard.textContent).toContain("Spark worker-2");
-    expect(headCard.textContent!.match(/WORKER/g)).toHaveLength(2);
   });
 
   it("names each bar for what it measures", () => {
