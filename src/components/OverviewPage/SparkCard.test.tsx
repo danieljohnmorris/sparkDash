@@ -23,6 +23,13 @@ function head(online: boolean): SparkSnapshot {
     metrics: { ...h.metrics, llm: [{ available: true, backend: "vllm", modelId: "big-model", generationTps: 12, prefillTps: 100, contextLength: 4096 }] },
   } as unknown as SparkSnapshot;
 }
+function headWithModel(models: string[] | undefined, modelId: string | null = "big-model"): SparkSnapshot {
+  return {
+    ...makeSpark("h"),
+    role: "head",
+    metrics: { ...makeSpark("h").metrics, llm: [{ available: true, backend: "vllm", modelId, models, generationTps: 12, prefillTps: 100, contextLength: 4096 }] },
+  } as unknown as SparkSnapshot;
+}
 
 describe("SparkCard", () => {
   it("is a plain container whose name is the only link; no interactive element nests another", () => {
@@ -55,7 +62,34 @@ describe("SparkCard", () => {
   it("a worker does not show an offline head's stale model", () => {
     const { container } = render(<SparkCard spark={worker()} headSpark={head(false)} temperatureUnit="celsius" />);
     expect(container.textContent).not.toContain("big-model");
-    expect(container.textContent).toContain("cfg-label");
+    expect(container.textContent).toContain("No model on head");
     expect(container.textContent).toContain("Head is offline");
+  });
+
+  it("shows the derived head model and every member with its role", () => {
+    const workerTwo = { ...worker(), id: "w2", name: "Spark w2" } as SparkSnapshot;
+    const { container } = render(
+      <SparkCard spark={head(true)} groupSparks={[head(true), worker(), workerTwo]} temperatureUnit="celsius" />,
+    );
+    const group = container.querySelector<HTMLElement>(".ov-group")!;
+    expect(group).not.toBeNull();
+    expect(group.textContent).toContain("Spark h");
+    expect(group.textContent).toContain("Spark w");
+    expect(group.textContent).toContain("Spark w2");
+    expect(group.textContent).toContain("big-model");
+    expect(group.textContent).toContain("HEAD");
+    expect(group.textContent).toContain("WORKER");
+    expect(group.textContent!.match(/WORKER/g)).toHaveLength(2);
+  });
+
+  it("shows a worker with an unmatched configured head as unknown", () => {
+    const { container } = render(<SparkCard spark={worker()} headSpark={null} temperatureUnit="celsius" />);
+    expect(container.textContent).toContain("Head unknown");
+    expect(container.textContent).toContain("No model on head");
+  });
+
+  it("uses the first served model id when modelId is absent", () => {
+    const { container } = render(<SparkCard spark={headWithModel(["models-fallback"])} temperatureUnit="celsius" />);
+    expect(container.textContent).toContain("models-fallback");
   });
 });
