@@ -551,6 +551,70 @@
   display: none;
 }
 
+/* Fleet-wide GPU clock cap (SPARK-7) */
+.ov .ov-cap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ov .ov-cap__auto {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ov .ov-cap__autorow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ov .ov-cap__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ov .ov-cap__capselect {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ov .ov-cap__capselect select {
+  padding: 3px 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ov .ov-cap__row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ov .ov-cap__presets {
+  flex-wrap: wrap;
+}
+.ov .ov-cap__presets > button {
+  padding: 4px 9px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ov .ov-cap__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ov .ov-cap__spark {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.ov .ov-cap__name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Side cards */
 .ov .ov-card {
   display: flex;

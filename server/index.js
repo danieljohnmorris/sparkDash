@@ -32,6 +32,7 @@ import {
   CLOCK_CAP_PRESETS,
 } from "./clockCap.js";
 import { ClockCapAutoController } from "./clockCapAuto.js";
+import { FleetClockAuto, parseFleetAutoCap } from "./clockCapAuto.js";
 import {
   decodeBenchManager,
   DECODE_BENCH_DEFAULTS,
@@ -426,6 +427,24 @@ const allowToolEval = createRateLimiter(30, 60_000);
 
 // ─── Monitor map ─────────────────────────────────────────
 const monitors = new Map();
+
+// ─── Fleet-wide clock-cap auto mode (SPARK-7) ────────────
+// One controller for every Spark: holds a cap (1800–2200 MHz) while a node's
+// GPU is ≥72 °C and releases it again at ≤67 °C. Temperatures come from each
+// monitor's metrics snapshot; only fresh, successfully collected readings act.
+const fleetClockAuto = new FleetClockAuto({
+  sparks: () => registry.sparks,
+  readTemp: (spark) => {
+    const gpu = monitors.get(spark.id)?.snapshot()?.metrics?.gpu;
+    if (!gpu || !collectionWasSuccessful(gpu)) return null;
+    const temp = gpu.temperature;
+    return Number.isFinite(temp) ? temp : null;
+  },
+  readStatus: readClockCapStatus,
+  apply: applyClockCap,
+  revert: revertClockCap,
+  recordEvent,
+});
 
 // ─── Start monitor for a Spark ───────────────────────────
 function startMonitor(spark) {
@@ -2309,6 +2328,41 @@ app.post("/api/sparks/clock-cap/mode", async (req, res) => {
   }
   eventLog.flush();
   res.json({ success: true, mode: "auto", results });
+// ─── Fleet-wide clock-cap auto mode ──────────────────────
+// One control for the whole fleet: while enabled, the controller holds a cap
+// (within 1800–2200 MHz) on any node whose GPU reaches 72 °C and releases it
+// again at 67 °C. See server/clockCapAuto.js.
+app.get("/api/sparks/clock-cap/auto", (_req, res) => {
+  res.json({ success: true, ...fleetClockAuto.status() });
+});
+
+app.post("/api/sparks/clock-cap/auto", async (req, res) => {
+  const enabled = req.body?.enabled;
+  if (typeof enabled !== "boolean") {
+    return res.status(400).json({ error: "enabled must be a boolean" });
+  }
+  let capMhz;
+  if (req.body?.capMhz !== undefined) {
+    try {
+      capMhz = parseFleetAutoCap(req.body.capMhz);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+  }
+  try {
+    const status = await fleetClockAuto.setEnabled(enabled, capMhz);
+    recordEvent({
+      type: enabled ? "gpu.clockcap.auto.enabled" : "gpu.clockcap.auto.disabled",
+      severity: "info",
+      message: enabled
+        ? `Fleet clock-cap auto enabled — holds ${status.capMhz} MHz at ≥${status.holdTempC}°C, releases at ≤${status.releaseTempC}°C`
+        : "Fleet clock-cap auto disabled",
+    });
+    eventLog.flush();
+    res.json({ success: true, ...status });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── Prometheus exposition (opt-in) ──────────────────────
@@ -2495,6 +2549,7 @@ if (!startupPreflight.fatal) {
     llmTokenRuntime.start();
     // Re-adopt Auto nodes from their gpu-clock-mode markers, then tick.
     clockCapAuto.start(registry);
+    fleetClockAuto.start();
   });
 } else {
   process.exitCode = 1;
@@ -2546,6 +2601,7 @@ async function shutdown(signal) {
     console.error("[sparkDash] failed to flush LLM daily history:", err.message);
   }
   llmTokenRuntime.stop();
+  fleetClockAuto.stop();
   const energyPersistenceSucceeded = fleetEnergyRuntime.stop();
   const streamAgentClosedGracefully = await closeLlmStreamAgent();
   if (!streamAgentClosedGracefully) {
