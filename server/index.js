@@ -25,6 +25,13 @@ import { getSettings, updateSettings, loadSettings } from "./settings.js";
 import { broadcastForLanIp, effectiveMac, normalizeMac, sendWol } from "./wol.js";
 import { remoteShutdownCommand, spawnLocalShutdown } from "./shutdown.js";
 import {
+  applyClockCap,
+  revertClockCap,
+  readClockCapStatus,
+  parseClockCap,
+  CLOCK_CAP_PRESETS,
+} from "./clockCap.js";
+import {
   decodeBenchManager,
   DECODE_BENCH_DEFAULTS,
   normalizeConcurrencies,
@@ -2127,6 +2134,106 @@ app.post("/api/sparks/:id/wake", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ─── GPU clock cap ───────────────────────────────────────
+// Set/revert the GPU clock cap on Spark nodes through the narrow sudoers rule
+// (nvidia-smi -lgc / -rgc only — see server/clockCap.js). Status reads the
+// per-node marker ~/.config/sparkdash/gpu-clock-cap and the live graphics
+// clock from nvidia-smi --query-gpu=clocks.gr.
+app.get("/api/sparks/clock-cap", async (req, res) => {
+  try {
+    const targets = req.query.id
+      ? [registry.getSpark(String(req.query.id))].filter(Boolean)
+      : registry.sparks;
+    if (req.query.id && targets.length === 0) {
+      return res.status(404).json({ error: "Spark not found" });
+    }
+    const sparks = await Promise.all(
+      targets.map(async (spark) => {
+        try {
+          const status = await readClockCapStatus(spark);
+          return { id: spark.id, name: spark.name, ok: true, ...status };
+        } catch (err) {
+          return { id: spark.id, name: spark.name, ok: false, error: err.message || String(err) };
+        }
+      })
+    );
+    res.json({ success: true, sparks });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/sparks/clock-cap", async (req, res) => {
+  // Validate before touching any node: mhz must be an exact preset integer, or
+  // null/absent-with-explicit-unlock for the revert. Out-of-list and
+  // non-integer values are rejected here, server-side.
+  const raw = req.body?.mhz;
+  const unlocking = raw === null || raw === "unlocked";
+  let mhz = null;
+  if (!unlocking) {
+    try {
+      mhz = parseClockCap(raw);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+  }
+
+  const bodyIds = req.body?.sparkIds;
+  const all = bodyIds === "all" || !Array.isArray(bodyIds) || bodyIds.length === 0;
+  const targets = all
+    ? registry.sparks
+    : bodyIds.map((id) => registry.getSpark(String(id))).filter(Boolean);
+  if (targets.length === 0) {
+    return res.status(400).json({ error: "No matching Sparks" });
+  }
+
+  const limiterKey = principalKey(req);
+  if (!allowDestructive(limiterKey) || !allowGlobalDestructive(clientKey(req))) {
+    return rejectLimited(res, "Too many clock-cap requests; try again shortly");
+  }
+
+  const results = [];
+  for (const spark of targets) {
+    const entry = { id: spark.id, name: spark.name };
+    try {
+      const status = unlocking ? await revertClockCap(spark) : await applyClockCap(spark, mhz);
+      results.push({
+        ...entry,
+        ok: true,
+        mhz: status.mhz,
+        stale: status.stale,
+        graphicsClockMHz: status.graphicsClockMHz,
+      });
+      recordEvent({
+        type: unlocking ? "gpu.clockcap.unlocked" : "gpu.clockcap.applied",
+        severity: "info",
+        sparkId: spark.id,
+        sparkName: spark.name,
+        message: unlocking
+          ? `Clock cap removed (Unlocked) on ${spark.name || spark.id}`
+          : `Clock cap set to ${mhz} MHz on ${spark.name || spark.id}`,
+      });
+    } catch (err) {
+      const msg = err.message || String(err);
+      results.push({ ...entry, ok: false, error: msg });
+      recordEvent({
+        type: "gpu.clockcap.failed",
+        severity: "error",
+        sparkId: spark.id,
+        sparkName: spark.name,
+        message: `Clock cap failed on ${spark.name || spark.id}: ${msg.split("\n")[0].slice(0, 120)}`,
+      });
+    }
+  }
+  eventLog.flush();
+  res.json({ success: true, mhz: unlocking ? null : mhz, results });
+});
+
+/** Preset list for the UI — a single source of truth with server/clockCap.js. */
+app.get("/api/sparks/clock-cap/presets", (_req, res) => {
+  res.json({ presets: CLOCK_CAP_PRESETS });
 });
 
 // ─── Prometheus exposition (opt-in) ──────────────────────

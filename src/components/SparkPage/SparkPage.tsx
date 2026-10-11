@@ -6,6 +6,7 @@ import { SparkHeader } from "./SparkHeader";
 import { HealthList } from "../ui/HealthFindings";
 import { SparkActions } from "./SparkActions";
 import { GpuPanel } from "./GpuPanel";
+import { ClockCapPanel } from "./ClockCapPanel";
 import { CpuPanel } from "./CpuPanel";
 import { RamPanel } from "./RamPanel";
 import { StoragePanel } from "./StoragePanel";
@@ -232,6 +233,14 @@ export function SparkPage({
                 temperatureUnit={temperatureUnit}
                 chip={spark.hardware.gpuChip}
                 hideMemory={showUnified}
+              />
+            </Item>
+            {/* Clock cap control + status: sits with the GPU/temperature stats. */}
+            <Item order={1}>
+              <ClockCapPanel
+                sparkId={spark.id}
+                sparkName={spark.name}
+                fleet={fleet?.map((s) => ({ id: s.id, name: s.name }))}
               />
             </Item>
             {/* Unified memory and CPU sit side by side (they stack when the column is narrow). */}

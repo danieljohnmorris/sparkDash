@@ -1046,3 +1046,24 @@
 .sp-chart .legend {
   margin-top: 6px;
 }
+
+/* GPU clock cap panel (SPARK-4) */
+.sp-cap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sp-cap__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.sp-cap__presets {
+  flex-wrap: wrap;
+}
+.sp-cap__presets > button {
+  padding: 4px 9px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
