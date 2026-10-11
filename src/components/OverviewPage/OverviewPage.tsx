@@ -12,7 +12,7 @@ import { SparkCard } from "./SparkCard";
 import { ActivityFeed } from "./ActivityFeed";
 import { ActivityIcon, PowerOnIcon, RotateIcon } from "../ui/icons";
 import { formatMb } from "../../shared/formatBytes";
-import { vramContextFor } from "../../shared/vramBreakdown";
+import { vramContextFor, type VramBreakdownContext } from "../../shared/vramBreakdown";
 import { makeHeadResolver } from "../../shared/sparkHead";
 import "../../styles/overview.css";
 
@@ -68,7 +68,7 @@ export function OverviewPage({
   // Head lookup and VRAM contexts for the whole fleet in one pass (not one scan per card).
   const cardContext = useMemo(() => {
     const resolveHead = makeHeadResolver(sparks);
-    const byId = new Map<string, { head: SparkSnapshot | null; vram: ReturnType<typeof vramContextFor> | null }>();
+    const byId = new Map<string, { head: SparkSnapshot | null; vram: VramBreakdownContext | null }>();
     for (const spark of sparks) {
       byId.set(spark.id, {
         head: resolveHead(spark),

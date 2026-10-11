@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { OverviewPage } from "./OverviewPage";
+import { makeSpark } from "../../testing/fixtures";
 import { render } from "../../testing/render";
 import type { SparkSnapshot } from "../../api/types";
 
@@ -44,6 +45,27 @@ function barLabels(container: HTMLElement): string[] {
 }
 
 describe("Overview card", () => {
+  it("renders no SPARKS overview box; model info stays on each card", () => {
+    const head = { ...makeSpark("head"), role: "head" } as SparkSnapshot;
+    const worker = { ...makeSpark("worker"), role: "worker", workerNode: true, workerHeadId: "head" } as SparkSnapshot;
+    const standalone = { ...makeSpark("standalone"), role: "standalone" } as SparkSnapshot;
+    const { container } = render(<OverviewPage sparks={[head, worker, standalone]} />);
+
+    // SPARK-5: the duplicate SPARKS box (model + HEAD/WORKER node list) is gone.
+    expect(container.querySelector<HTMLElement>(".ov-group")).toBeNull();
+    const headCard = [...container.querySelectorAll(".ov-sc")].find((card) => card.textContent?.includes("Spark head"))!;
+    expect(headCard.textContent).not.toContain("Spark worker");
+    // SPARK-1's per-card model info survives: head, worker and standalone each name the model.
+    expect(headCard.textContent).toContain("fixture-model");
+    expect(headCard.textContent).toContain("HEAD");
+    const workerCard = [...container.querySelectorAll(".ov-sc")].find((card) => card.textContent?.includes("Spark worker"))!;
+    expect(workerCard.textContent).toContain("fixture-model");
+    expect(workerCard.textContent).toContain("WORKER");
+    const standaloneCard = [...container.querySelectorAll(".ov-sc")].find((card) => card.textContent?.includes("Spark standalone"))!;
+    expect(standaloneCard.textContent).toContain("fixture-model");
+    expect(standaloneCard.textContent).toContain("STANDALONE");
+  });
+
   it("names each bar for what it measures", () => {
     const { container } = render(<OverviewPage sparks={[host({ cpuTemp: 51 })]} />);
     expect(barLabels(container)).toEqual(["VRAM", "GPU", "RAM", "GPU temp", "GPU power"]);

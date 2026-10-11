@@ -23,6 +23,13 @@ function head(online: boolean): SparkSnapshot {
     metrics: { ...h.metrics, llm: [{ available: true, backend: "vllm", modelId: "big-model", generationTps: 12, prefillTps: 100, contextLength: 4096 }] },
   } as unknown as SparkSnapshot;
 }
+function headWithModel(models: string[] | undefined, modelId: string | null = "big-model"): SparkSnapshot {
+  return {
+    ...makeSpark("h"),
+    role: "head",
+    metrics: { ...makeSpark("h").metrics, llm: [{ available: true, backend: "vllm", modelId, models, generationTps: 12, prefillTps: 100, contextLength: 4096 }] },
+  } as unknown as SparkSnapshot;
+}
 
 describe("SparkCard", () => {
   it("is a plain container whose name is the only link; no interactive element nests another", () => {
@@ -55,7 +62,30 @@ describe("SparkCard", () => {
   it("a worker does not show an offline head's stale model", () => {
     const { container } = render(<SparkCard spark={worker()} headSpark={head(false)} temperatureUnit="celsius" />);
     expect(container.textContent).not.toContain("big-model");
-    expect(container.textContent).toContain("cfg-label");
+    expect(container.textContent).toContain("No model on head");
     expect(container.textContent).toContain("Head is offline");
+  });
+
+  it("shows the head model in the eyebrow but no SPARKS overview box", () => {
+    const { container } = render(
+      <SparkCard spark={head(true)} temperatureUnit="celsius" />,
+    );
+    expect(container.querySelector<HTMLElement>(".ov-group")).toBeNull();
+    expect(container.textContent).not.toContain("Spark w2");
+    // SPARK-1's model info stays on the card itself (eyebrow row).
+    expect(container.textContent).toContain("big-model");
+    expect(container.textContent).toContain("HEAD");
+  });
+
+  it("shows a worker with an unmatched configured head as unknown", () => {
+    const { container } = render(<SparkCard spark={worker()} headSpark={null} temperatureUnit="celsius" />);
+    expect(container.textContent).toContain("Head unknown");
+  });
+
+  it("uses the first served model id when modelId is absent", () => {
+    const { container } = render(
+      <SparkCard spark={headWithModel(["models-fallback"], null)} temperatureUnit="celsius" />,
+    );
+    expect(container.textContent).toContain("models-fallback");
   });
 });

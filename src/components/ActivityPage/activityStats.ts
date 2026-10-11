@@ -55,6 +55,7 @@ export function categorize(type: string): CategoryId {
   if (type === "spark.online" || type === "spark.offline") return "status";
   if (type === "spark.added" || type === "spark.removed") return "fleet";
   if (type.startsWith("gpu.throttle")) return "thermal";
+  if (type.startsWith("gpu.clockcap")) return "power";
   if (type.startsWith("health.")) return "health";
   if (type.startsWith("hermes.")) return "hermes";
   if (type.startsWith("bench.")) return "bench";
@@ -83,6 +84,9 @@ const KNOWN_LABELS: Record<string, string> = {
   "health.cleared": "Health OK",
   "power.shutdown": "Shutdown",
   "power.wake": "Wake",
+  "gpu.clockcap.applied": "Clock cap applied",
+  "gpu.clockcap.unlocked": "Clock cap removed",
+  "gpu.clockcap.failed": "Clock cap failed",
 };
 
 const BENCH_NAME: Record<string, string> = { decode: "Decode bench", prefill: "Prefill bench", quality: "Quality bench" };
