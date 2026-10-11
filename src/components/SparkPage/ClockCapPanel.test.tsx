@@ -4,9 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../api/client", () => ({
   fetchClockCap: vi.fn(),
   setClockCap: vi.fn(),
+  setClockCapMode: vi.fn(),
 }));
 
-import { fetchClockCap, setClockCap } from "../../api/client";
+import { fetchClockCap, setClockCap, setClockCapMode } from "../../api/client";
 import { ClockCapPanel } from "./ClockCapPanel";
 import { flush, render } from "../../testing/render";
 
@@ -41,6 +42,7 @@ function dialogButton(label: string): HTMLButtonElement {
 beforeEach(() => {
   vi.mocked(fetchClockCap).mockResolvedValue({ success: true, sparks: [okStatus()] });
   vi.mocked(setClockCap).mockReset();
+  vi.mocked(setClockCapMode).mockReset();
 });
 
 describe("ClockCapPanel", () => {
@@ -134,5 +136,76 @@ describe("ClockCapPanel", () => {
     expect(text).toContain("sudo: a password is required");
     // The dialog stays open so the failure is visible next to the action.
     expect(document.body.querySelector(".modal-sheet")).toBeTruthy();
+  });
+
+  it("shows the Auto badge, temp, last step and step log when Auto is on", async () => {
+    const at = new Date("2026-10-11T19:42:00").getTime();
+    vi.mocked(fetchClockCap).mockResolvedValue({
+      success: true,
+      sparks: [
+        okStatus({
+          mhz: 1900,
+          graphicsClockMHz: 1895,
+          tempC: 71,
+          auto: {
+            enabled: true,
+            cap: 1900,
+            lastTempC: 71,
+            lastStep: { at, from: 2000, to: 1900, tempC: 71, dir: "down" },
+            log: [{ at, from: 2000, to: 1900, tempC: 71, dir: "down" }],
+            lastError: null,
+          },
+        }),
+      ],
+    });
+    const { container } = render(<ClockCapPanel sparkId="s1" sparkName="spark1" />);
+    await flush();
+    const text = container.textContent ?? "";
+    expect(text).toContain("Auto");
+    expect(text).toContain("71 °C");
+    expect(text).toContain("Last step");
+    expect(text).toMatch(/↓ 2000 → 1900/);
+    // Vitest's expect has no message arg here — assert the shape instead.
+    expect(/↓ 2000 → 1900 at \d{2}:\d{2}/.test(text)).toBe(true);
+    expect(container.querySelector(".sp-cap__auto-log")?.children.length).toBe(1);
+  });
+
+  it("confirms, then enables Auto through the mode endpoint", async () => {
+    vi.mocked(setClockCapMode).mockResolvedValue({
+      success: true,
+      mode: "auto",
+      results: [{ id: "s1", name: "spark1", ok: true, cap: 2000, tempC: 60 }],
+    });
+    const { container } = render(<ClockCapPanel sparkId="s1" sparkName="spark1" />);
+    await flush();
+
+    act(() => [...container.querySelectorAll<HTMLButtonElement>(".sp-cap__row > button")].find((b) => b.textContent?.includes("Auto"))!.click());
+    const sheet = document.body.querySelector(".modal-sheet")!;
+    expect(sheet.textContent).toContain("spark1");
+    expect(vi.mocked(setClockCapMode)).not.toHaveBeenCalled();
+
+    await act(async () => dialogButton("Enable Auto").click());
+    await flush();
+    expect(vi.mocked(setClockCapMode)).toHaveBeenCalledWith(["s1"], "auto");
+    // The enable response folds in: Auto badge + start cap without a refresh.
+    expect(container.textContent).toContain("Auto cap");
+    expect(container.textContent).toContain("2000 MHz");
+  });
+
+  it("reports an Auto enable failure instead of failing silently", async () => {
+    vi.mocked(setClockCapMode).mockResolvedValue({
+      success: true,
+      mode: "auto",
+      results: [{ id: "s1", name: "spark1", ok: false, error: "SSH to spark1:22 failed" }],
+    });
+    const { container } = render(<ClockCapPanel sparkId="s1" sparkName="spark1" />);
+    await flush();
+
+    act(() => [...container.querySelectorAll<HTMLButtonElement>(".sp-cap__row > button")].find((b) => b.textContent?.includes("Auto"))!.click());
+    await act(async () => dialogButton("Enable Auto").click());
+    await flush();
+    const text = container.textContent ?? "";
+    expect(text).toContain("Clock cap failed");
+    expect(text).toContain("SSH to spark1:22 failed");
   });
 });
