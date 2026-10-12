@@ -9,6 +9,7 @@ import { BENCH_TYPES } from "../bench/benchCatalog";
 import { BoltIcon, ChartIcon, GearIcon, GridIcon, ListIcon, PlusIcon, ServerIcon, TerminalIcon, ThermometerIcon, TokensIcon } from "../ui/icons";
 import { isThrottling, railSubLabel } from "./sparkSummary";
 import { ShutdownAll } from "../ShutdownAll";
+import { StopAllLlms } from "../StopAllLlms";
 
 /** Keep in sync with the sheet-out animation in shell.css. */
 const SHEET_LEAVE_MS = 240;
@@ -176,6 +177,7 @@ export function MobileTabBar({ sparks, activeId, onSelect, onAdd, onOpenSettings
                     <span>Fleet</span>
                   </div>
                   <div className="sheet-power">
+                    <StopAllLlms className="sheet-power__btn" />
                     <ShutdownAll sparks={sparks} className="sheet-power__btn" />
                   </div>
                     </>

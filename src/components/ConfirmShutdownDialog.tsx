@@ -16,6 +16,14 @@ interface ConfirmShutdownDialogProps {
   confirmLabel?: string;
   /** Lines naming running work this action will stop; rendered in a danger box. */
   warnings?: string[];
+  /** Phrase the user must type. Default "poweroff" — the shutdown confirm. */
+  confirmPhrase?: string;
+  /** Danger-box footnote. Default is the shutdown one. */
+  note?: string;
+  /** Checkbox label. Default is the shutdown one. */
+  ackText?: string;
+  /** Confirm button label while the action runs. Default "Shutting down…". */
+  busyLabel?: string;
 }
 
 function useEscape(enabled: boolean, onClose: () => void) {
@@ -37,6 +45,10 @@ export function ConfirmShutdownDialog({
   description,
   confirmLabel = "Shut down",
   warnings,
+  confirmPhrase = CONFIRM_PHRASE,
+  note = "Running containers and sessions will stop. The host powers off after a graceful stop.",
+  ackText = "I understand this cannot be undone from the dashboard.",
+  busyLabel = "Shutting down…",
 }: ConfirmShutdownDialogProps) {
   const [phrase, setPhrase] = useState("");
   const [acknowledged, setAcknowledged] = useState(false);
@@ -68,7 +80,7 @@ export function ConfirmShutdownDialog({
     };
   }, [mounted]);
 
-  const phraseOk = phrase.trim().toLowerCase() === CONFIRM_PHRASE;
+  const phraseOk = phrase.trim().toLowerCase() === confirmPhrase;
   const canConfirm = phraseOk && acknowledged && !submitting;
 
   const handleConfirm = async () => {
@@ -122,7 +134,7 @@ export function ConfirmShutdownDialog({
                 ))}
               </ul>
             ) : null}
-            <span>Running containers and sessions will stop. The host powers off after a graceful stop.</span>
+            <span>{note}</span>
           </div>
 
           <label className="check-row">
@@ -132,12 +144,12 @@ export function ConfirmShutdownDialog({
               disabled={submitting}
               onChange={(e) => setAcknowledged(e.target.checked)}
             />
-            <span>I understand this cannot be undone from the dashboard.</span>
+            <span>{ackText}</span>
           </label>
 
           <div className="field">
             <label htmlFor={`${titleId}-phrase`}>
-              Type <b className="mono">{CONFIRM_PHRASE}</b> to confirm
+              Type <b className="mono">{confirmPhrase}</b> to confirm
             </label>
             <input
               id={`${titleId}-phrase`}
@@ -155,7 +167,7 @@ export function ConfirmShutdownDialog({
                 }
               }}
               className="field-input field-input--mono"
-              placeholder={CONFIRM_PHRASE}
+              placeholder={confirmPhrase}
             />
           </div>
         </div>
@@ -172,7 +184,7 @@ export function ConfirmShutdownDialog({
               className="btn btn--danger"
             >
               <PowerOffIcon className="h-3.5 w-3.5" />
-              {submitting ? "Shutting down…" : confirmLabel}
+              {submitting ? busyLabel : confirmLabel}
             </button>
           </div>
         </div>
