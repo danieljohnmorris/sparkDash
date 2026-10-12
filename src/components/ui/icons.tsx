@@ -214,6 +214,15 @@ export function PowerOffIcon({ className = "" }: { className?: string }) {
   );
 }
 
+/** Solid square — used for "stop serving / unload". */
+export function StopIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg {...baseProps(className)}>
+      <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 /** Circle-i — for short help / tooltips. */
 export function InfoIcon({ className = "" }: { className?: string }) {
   return (

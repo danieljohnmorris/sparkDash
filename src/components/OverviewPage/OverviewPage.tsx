@@ -3,6 +3,7 @@ import type { SparkSnapshot } from "../../api/types";
 import { isWorkerSpark } from "../../api/sparkRole";
 import { updateAllHermes, wakeAllSparks } from "../../api/client";
 import { ShutdownAll } from "../ShutdownAll";
+import { StopAllLlms } from "../StopAllLlms";
 import { FleetEnergyCard } from "./FleetEnergyCard";
 import { FleetAlertStrip } from "./FleetAlertStrip";
 import { FleetTokenTotals } from "./FleetTokenTotals";
@@ -272,6 +273,7 @@ export function OverviewPage({
                   Wake all
                 </button>
               )}
+              <StopAllLlms className="ov-shutdown" />
               <ShutdownAll sparks={sparks} className="ov-shutdown" />
             </>
           )}

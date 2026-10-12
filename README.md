@@ -538,6 +538,7 @@ sparkDash/
 | GET | `/api/sparks/:id/gpu-history` | GPU utilization, temperature and power % (`windowMs`; up to 8 h at ~2 s resolution, up to 7 days at minute resolution from the long-retention store; parallel arrays) |
 | GET | `/api/events` | Fleet event log (`limit`, `sparkId`, `sinceId`, `beforeId`; 2000 kept) |
 | GET/POST/PUT/DELETE | `/api/sparks/:id/llm-launchers[/:lid]` | Registered start.sh / stop.sh model launchers; `POST …/:lid/start` and `…/stop` run them, `GET …/jobs/:jobId` streams the shell output |
+| POST | `/api/sparks/llm-stop-all` | Stop serving: run the stop script of every launcher the probe reports running, on `sparkIds: "all"` or an array of ids |
 | GET/POST/DELETE | `/api/sparks/:id/tool-eval/…` | Tool Eval Bench on a Spark: `status`, `install`, `preview`, `probe`, `runs` (start / list / stream / attach / stop / refresh / `result` / delete); `GET /api/tool-eval/spec` serves the option spec |
 | POST | `/api/sparks/test` | Ephemeral SSH + LLM (+ Comfy if enabled) test (no persist) |
 | POST | `/api/sparks/:id/test` | Connectivity test (can save password) |
@@ -670,6 +671,42 @@ For compatibility, `SSH_CONTROL_PERSIST` is accepted as a seconds-based fallback
 - **Wake** / **Wake All** send a UDP magic packet (port 9) to **dedicated GPU hosts** whose NIC and firmware support Wake-on-LAN. The MAC is taken from the **enP7s7** interface while the host is online (persisted as `detectedMacAddress`), or from a **MAC override** in Edit Spark. Broadcast is derived as `/24` from LAN IP, or `255.255.255.255` if LAN IP is missing. **DGX Spark does not wake this way** — the GB10 onboard NIC has no Wake-on-LAN — so the Wake control is not offered on Spark units.
 - Batch shutdown only targets **online** Sparks; offline nodes are skipped.
 - Power APIs are mutations: with `SPARKDASH_TOKEN` set they require it; without it they are open on loopback (local trust) **and** on a remote bind, unless `SPARKDASH_ALLOW_OPEN_REMOTE=0` makes that bind fail closed.
+
+### Stop serving (unload LLM)
+
+Unloading a model frees its VRAM and lets the GPUs cool without powering the node off. One
+control, two scopes:
+
+- **Unload** on an Overview card (visible while that Spark is serving) stops every model
+  running on **that** Spark.
+- **Stop all LLMs** next to **Shut down all** in the Overview header (and in the mobile
+  Sparks sheet) stops models on **every** Spark. Both open a confirm dialog (type
+  `unload`) before anything runs.
+
+Both, and the Models panel's per-model **Stop**, call the same machinery — there is no
+second stop path:
+
+| UI | API | What runs on the Spark |
+|----|-----|------------------------|
+| Overview card **Unload** / fleet **Stop all LLMs** | `POST /api/sparks/llm-stop-all` (`sparkIds: "all"` or an array) | The registered `stop.sh` of each launcher the status probe reports running |
+| Models panel **Stop** (per model) | `POST /api/sparks/:id/llm-launchers/:lid/stop` | That launcher's registered `stop.sh` |
+
+`stop.sh` runs inside the launcher's directory over SSH (host-user drop + `nsenter` for the
+local unit), exactly like a start does, and its output streams into the Models panel
+terminal. This is the same script you would run by hand to stop a TensorFold / recipe
+container — if you keep a `sparks-stop`-style helper on a host, make it call the same
+`stop.sh`; sparkDash has no separate TensorFold stop.
+
+Caveats:
+
+- "Running" is tracked by the pidfile sparkDash writes when it starts a model
+  (`~/.cache/sparkdash/llm/<launcher>.pid`). A model started **outside** the dashboard is
+  invisible to the batch stop — register it as a launcher and start it here to control it
+  from the UI.
+- After the stop scripts finish, sparkDash re-probes the LLM ports, so the card shows
+  "not serving" and the VRAM/temperature bars fall without waiting for the next poll.
+- A stop script that fails or hangs is reported per Spark (up to 2 minutes per launcher)
+  instead of failing silently.
 
 ### Themes
 

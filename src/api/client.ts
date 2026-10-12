@@ -567,6 +567,29 @@ export function wakeAllSparks(): Promise<BatchPowerResult> {
   return apiFetch("/api/sparks/wake-all", { method: "POST" });
 }
 
+export interface LlmStopAllResult {
+  id: string;
+  name: string;
+  ok: boolean;
+  /** Names of the launchers whose stop script ran and finished cleanly. */
+  stopped?: string[];
+  error?: string;
+}
+
+/** Stop every running LLM launcher on the targeted Spark(s). */
+export interface LlmStopAllResponse {
+  success: boolean;
+  results: LlmStopAllResult[];
+}
+
+/**
+ * Stop serving: run the registered stop script of every launcher the probe
+ * reports running — on one Spark (unload) or across the fleet.
+ */
+export function stopAllLlms(sparkIds: string[] | "all"): Promise<LlmStopAllResponse> {
+  return apiFetch("/api/sparks/llm-stop-all", { method: "POST", body: JSON.stringify({ sparkIds }) });
+}
+
 // ─── GPU clock cap ───────────────────────────────────────
 /** Per-node clock cap state (marker + live graphics clock). */
 export function fetchClockCap(id?: string): Promise<{ success: boolean; sparks: ClockCapSparkStatus[] }> {

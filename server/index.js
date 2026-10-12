@@ -946,6 +946,98 @@ for (const action of ["start", "stop", "attach"]) {
   });
 }
 
+// ─── Stop serving (unload LLM): run each running launcher's stop.sh ──
+/** How long a batch stop waits for one stop.sh to finish before reporting failure. */
+const LLM_STOP_ALL_WAIT_MS = 120_000;
+
+/** Resolves once the given stop job is no longer running (or the wait times out). */
+function waitForLauncherJob(sparkId, jobId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve) => {
+    const tick = () => {
+      const job = launcherManager.latestJob(sparkId);
+      // The job was replaced or detached (e.g. an attach arrived): the script itself keeps running.
+      if (!job || job.id !== jobId) return resolve({ ok: true });
+      if (job.status !== "running") {
+        return resolve({ ok: job.status === "completed", exitCode: job.exitCode, error: job.error });
+      }
+      if (Date.now() >= deadline) return resolve({ ok: false, error: "stop script did not finish in time" });
+      setTimeout(tick, 400);
+    };
+    tick();
+  });
+}
+
+/**
+ * Batch route (3 segments, like shutdown-all) so it can never be captured by a
+ * future /api/sparks/:id/* path. Stops every launcher the status probe reports
+ * RUNNING — the same stop.sh the Models panel runs — on one Spark or fleet-wide.
+ */
+app.post("/api/sparks/llm-stop-all", async (req, res) => {
+  if (!allowDestructive(principalKey(req)) || !allowGlobalDestructive(clientKey(req))) {
+    return rejectLimited(res, "Too many stop requests; try again shortly");
+  }
+  const requested = req.body?.sparkIds ?? "all";
+  if (requested !== "all" && (!Array.isArray(requested) || !requested.every((id) => typeof id === "string"))) {
+    return res.status(400).json({ error: 'sparkIds must be "all" or an array of Spark ids' });
+  }
+  const results = [];
+  const targets = [];
+  if (requested === "all") {
+    targets.push(...registry.sparks);
+  } else {
+    for (const id of new Set(requested)) {
+      const spark = registry.getSpark(id);
+      if (spark) targets.push(spark);
+      else results.push({ id, name: id, ok: false, error: "Spark not found" });
+    }
+  }
+  await Promise.all(
+    targets.map(async (spark) => {
+      const entry = { id: spark.id, name: spark.name, ok: true, stopped: [] };
+      results.push(entry);
+      try {
+        const launchers = launcherStore.list(spark.id);
+        if (launchers.length === 0) return; // nothing registered, nothing to stop
+        const statuses = await cachedLauncherStatuses(spark, launchers);
+        const running = launchers.filter((l) => statuses[l.id] === "running");
+        if (running.length === 0) {
+          // All-unknown means the SSH probe itself failed: stopping nothing would be silent success.
+          if (launchers.every((l) => statuses[l.id] === "unknown")) {
+            entry.ok = false;
+            entry.error = "Could not read the launcher states over SSH";
+          }
+          return;
+        }
+        for (const launcher of running) {
+          const started = launcherManager.startJob(spark, launcher, "stop");
+          if (!started.ok) {
+            entry.ok = false;
+            entry.error = `Could not stop ${launcher.name}: another job is running`;
+            return;
+          }
+          const done = await waitForLauncherJob(spark.id, started.job.id, LLM_STOP_ALL_WAIT_MS);
+          if (!done.ok) {
+            entry.ok = false;
+            entry.error = `Stop script for ${launcher.name} failed${done.exitCode != null ? ` (exit ${done.exitCode})` : ""}`;
+            return;
+          }
+          entry.stopped.push(launcher.name);
+        }
+        launcherStatusCache.delete(spark.id);
+        // Nudge the LLM probe so the UI shows "not serving" and falling VRAM right away.
+        const mon = monitors.get(spark.id);
+        if (mon?.refreshDomain) await mon.refreshDomain("llm").catch(() => {});
+      } catch (err) {
+        entry.ok = false;
+        entry.error = err instanceof Error ? err.message : String(err);
+      }
+    })
+  );
+  forceBroadcast();
+  res.json({ success: results.every((r) => r.ok), results });
+});
+
 // Cancel a ComfyUI job (running interrupt and/or pending dequeue).
 app.post("/api/sparks/:id/comfy/cancel", async (req, res) => {
   if (!allowDestructive(principalKey(req)) || !allowGlobalDestructive(clientKey(req))) {

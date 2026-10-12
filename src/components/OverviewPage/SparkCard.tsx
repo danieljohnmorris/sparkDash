@@ -2,7 +2,8 @@ import { memo, useState } from "react";
 import type { SparkSnapshot } from "../../api/types";
 import { resolveSparkRole } from "../../api/sparkRole";
 import { servedModelId, usableHead } from "../../shared/sparkHead";
-import { wakeSpark } from "../../api/client";
+import { wakeSpark, stopAllLlms } from "../../api/client";
+import { invalidateLaunchers } from "../../hooks/launcherCache";
 import { backendLabel } from "../../shared/llmBackends";
 import { formatDiskSize, formatMb } from "../../shared/formatBytes";
 import { Tag } from "../ui/Tag";
@@ -11,7 +12,8 @@ import { AppLink } from "../ui/AppLink";
 import { idToPath } from "../../constants";
 import { VramBreakdownBar } from "../ui/VramBreakdownBar";
 import { computeVramBreakdown, type VramBreakdownContext } from "../../shared/vramBreakdown";
-import { ImageIcon, PowerOnIcon } from "../ui/icons";
+import { ImageIcon, PowerOnIcon, StopIcon } from "../ui/icons";
+import { ConfirmShutdownDialog } from "../ConfirmShutdownDialog";
 import { formatCtx } from "./fleetStats";
 import { ModelLauncher } from "./ModelLauncher";
 
@@ -88,6 +90,9 @@ function SparkCardImpl({
   const llm = llmIdx >= 0 ? llmList[llmIdx] : null;
   const [wakeMsg, setWakeMsg] = useState<string | null>(null);
   const [waking, setWaking] = useState(false);
+  const [unloadOpen, setUnloadOpen] = useState(false);
+  const [unloading, setUnloading] = useState(false);
+  const [unloadMsg, setUnloadMsg] = useState<string | null>(null);
 
   const usage = gpu?.usage ?? 0;
   const tempRaw = gpu?.temperature ?? 0;
@@ -138,6 +143,24 @@ function SparkCardImpl({
       setWakeMsg(err instanceof Error ? err.message : "Wake failed");
     } finally {
       setWaking(false);
+    }
+  }
+
+  // Stop serving: run the registered stop script of every launcher this Spark has
+  // running (the same stop.sh the Models panel runs), then drop the cached
+  // launcher states so the card reflects "stopped" without waiting for a probe.
+  async function onUnload() {
+    setUnloading(true);
+    setUnloadMsg(null);
+    try {
+      const res = await stopAllLlms([spark.id]);
+      const entry = res.results[0];
+      if (!entry?.ok) throw new Error(entry?.error ?? "Stop failed");
+      invalidateLaunchers(spark.id);
+    } catch (err) {
+      setUnloadMsg(err instanceof Error ? err.message : "Stop failed");
+    } finally {
+      setUnloading(false);
     }
   }
 
@@ -370,6 +393,18 @@ function SparkCardImpl({
             <div className="ov-modelrow" title={modelTitle}>
               <code>{modelText}</code>
               {modelEyebrowRight ? <span className="ov-modelrow__ctx">{modelEyebrowRight}</span> : null}
+              {role !== "worker" && online && llm && spark.llmMonitoring !== false ? (
+                <button
+                  type="button"
+                  className="btn btn--sm btn--danger ov-modelrow__stop"
+                  disabled={unloading}
+                  onClick={() => setUnloadOpen(true)}
+                  title="Stop serving: runs the model's stop script on the Spark, freeing VRAM"
+                >
+                  <StopIcon className="h-3.5 w-3.5" />
+                  Unload
+                </button>
+              ) : null}
             </div>
           ) : (
             // Nothing to show, but keep the row's height so Storage lines up across the cards.
@@ -377,9 +412,27 @@ function SparkCardImpl({
               <code>{"\u00a0"}</code>
             </div>
           )}
+          {unloadMsg ? (
+            <div className="ov-modelrow__err" role="alert">
+              {unloadMsg}
+            </div>
+          ) : null}
         </>
       )}
 
+      <ConfirmShutdownDialog
+        open={unloadOpen}
+        onClose={() => setUnloadOpen(false)}
+        onConfirm={onUnload}
+        title={`Unload ${spark.name}`}
+        description={`Stop serving ${modelText ?? "the model"} on ${spark.name}? The model's stop script runs on the Spark — the engine exits and its VRAM is freed.`}
+        confirmLabel="Stop serving"
+        confirmPhrase="unload"
+        busyLabel="Stopping…"
+        warnings={["In-flight LLM requests are dropped."]}
+        note="The engine process exits; nothing powers off. Start a model again at any time."
+        ackText="I understand in-flight requests will be dropped."
+      />
     </div>
   );
 }

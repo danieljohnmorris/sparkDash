@@ -5,8 +5,10 @@ vi.mock("../../api/client", () => ({
   fetchLaunchers: () => new Promise(() => {}),
   runLauncher: vi.fn(),
   wakeSpark: vi.fn(),
+  stopAllLlms: vi.fn(),
 }));
 
+import { stopAllLlms } from "../../api/client";
 import { SparkCard } from "./SparkCard";
 import { makeSpark } from "../../testing/fixtures";
 import { render } from "../../testing/render";
@@ -87,5 +89,41 @@ describe("SparkCard", () => {
       <SparkCard spark={headWithModel(["models-fallback"], null)} temperatureUnit="celsius" />,
     );
     expect(container.textContent).toContain("models-fallback");
+  });
+
+  it("offers Unload while serving and confirms before running the stop script", async () => {
+    vi.mocked(stopAllLlms).mockResolvedValue({
+      success: true,
+      results: [{ id: "h", name: "Spark h", ok: true, stopped: ["big-model"] }],
+    });
+    const { container } = render(<SparkCard spark={head(true)} temperatureUnit="celsius" />);
+
+    const unload = Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.includes("Unload"));
+    expect(unload).toBeDefined();
+    act(() => unload!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    const sheet = document.body.querySelector<HTMLDivElement>('[role="dialog"]')!;
+    expect(sheet.textContent).toContain("Stop serving big-model on Spark h");
+    expect(stopAllLlms).not.toHaveBeenCalled();
+
+    const phrase = sheet.querySelector<HTMLInputElement>("input.field-input--mono")!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    act(() => {
+      setter?.call(phrase, "unload");
+      phrase.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => sheet.querySelector<HTMLInputElement>(".check-row input")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await act(async () => {
+      Array.from(sheet.querySelectorAll("button"))
+        .find((b) => b.textContent?.trim() === "Stop serving")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(stopAllLlms).toHaveBeenCalledTimes(1);
+    expect(stopAllLlms).toHaveBeenCalledWith(["h"]);
+  });
+
+  it("does not offer Unload without a serving model", () => {
+    const idle = { ...makeSpark("a"), metrics: { ...makeSpark("a").metrics, llm: [] } } as SparkSnapshot;
+    const { container } = render(<SparkCard spark={idle} temperatureUnit="celsius" />);
+    expect(Array.from(container.querySelectorAll("button")).some((b) => b.textContent?.includes("Unload"))).toBe(false);
   });
 });
