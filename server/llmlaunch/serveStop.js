@@ -6,6 +6,9 @@
  */
 import { execFile } from "child_process";
 import { promisify } from "util";
+import fs from "fs";
+import path from "path";
+import { HOST_PATHS } from "../config.js";
 import { sshExec } from "../collectors/ssh.js";
 
 const execFileAsync = promisify(execFile);
@@ -62,7 +65,28 @@ export function parseServeStopOutput(stdout) {
  * Stop docker-served LLMs on one Spark. Returns { stopped: string[], servingPort: boolean }.
  * @param {(spark: object, cmd: string, opts?: object) => Promise<string>} exec
  */
+/** Host mount ns (container install) so local docker/stop sees host containers. */
+function hostMountNs(procPath = HOST_PATHS.PROC) {
+  const ns = path.join(procPath, "1", "ns", "mnt");
+  try {
+    return fs.existsSync(ns) ? ns : null;
+  } catch {
+    return null;
+  }
+}
+
 async function localBash(cmd, timeoutMs) {
+  const mntNs = hostMountNs();
+  // Inside sparkDash's Docker install, plain bash sees the container's docker
+  // (or none). Enter the host mount namespace — same pattern as shutdown.js.
+  if (mntNs) {
+    const { stdout } = await execFileAsync(
+      "nsenter",
+      [`--mount=${mntNs}`, "--", "/bin/bash", "-c", cmd],
+      { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }
+    );
+    return String(stdout).trim();
+  }
   const { stdout } = await execFileAsync("/bin/bash", ["-c", cmd], {
     timeout: timeoutMs,
     maxBuffer: 10 * 1024 * 1024,
