@@ -91,4 +91,10 @@ describe("Overview card", () => {
     expect(container.querySelector('[title*="SGLang"]')).not.toBeNull();
     expect(container.innerHTML).not.toContain("sgLang");
   });
+
+  it("has no fleet clock panel; the actuator lives in Settings (SPARK-8)", () => {
+    const { container } = render(<OverviewPage sparks={[host()]} />);
+    expect(container.textContent).not.toContain("GPU clock cap");
+    expect(container.querySelector('[aria-label="Fleet clock cap preset"]')).toBeNull();
+  });
 });

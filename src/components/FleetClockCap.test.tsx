@@ -1,7 +1,7 @@
 import { act } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../api/client", () => ({
+vi.mock("../api/client", () => ({
   fetchClockCap: vi.fn(),
   fetchFleetClockAuto: vi.fn(),
   setClockCap: vi.fn(),
@@ -13,10 +13,10 @@ import {
   fetchFleetClockAuto,
   setClockCap,
   setFleetClockAuto,
-} from "../../api/client";
-import type { SparkSnapshot } from "../../api/types";
+} from "../api/client";
+import type { SparkSnapshot } from "../api/types";
 import { FleetClockCap } from "./FleetClockCap";
-import { flush, render } from "../../testing/render";
+import { flush, render } from "../testing/render";
 
 function okStatus(id: string, overrides = {}) {
   return { id, name: id.toUpperCase(), ok: true, mhz: null, stale: false, graphicsClockMHz: null, ...overrides };
