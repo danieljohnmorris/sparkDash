@@ -34,6 +34,7 @@ import type {
   ClockCapSparkStatus,
   ClockCapApplyResponse,
   ClockCapModeResponse,
+  FleetClockAutoState,
 } from "./types";
 import { authHeaders, reportAuthRequired } from "./authToken";
 
@@ -599,6 +600,25 @@ export function setClockCapMode(
   return apiFetch("/api/sparks/clock-cap/mode", {
     method: "POST",
     body: JSON.stringify({ sparkIds, mode }),
+  });
+}
+
+/** Fleet-wide auto-mode controller state (thresholds, cap, per-Spark holding). */
+export function fetchFleetClockAuto(): Promise<FleetClockAutoState> {
+  return apiFetch("/api/sparks/clock-cap/auto");
+}
+
+/**
+ * Enable or disable fleet-wide auto mode for every Spark at once. `capMhz`
+ * (within 1800–2200) optionally changes the cap applied while holding.
+ */
+export function setFleetClockAuto(
+  enabled: boolean,
+  capMhz?: number
+): Promise<FleetClockAutoState> {
+  return apiFetch("/api/sparks/clock-cap/auto", {
+    method: "POST",
+    body: JSON.stringify(capMhz !== undefined ? { enabled, capMhz } : { enabled }),
   });
 }
 

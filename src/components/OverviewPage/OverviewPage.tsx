@@ -4,6 +4,7 @@ import { isWorkerSpark } from "../../api/sparkRole";
 import { updateAllHermes, wakeAllSparks } from "../../api/client";
 import { ShutdownAll } from "../ShutdownAll";
 import { FleetEnergyCard } from "./FleetEnergyCard";
+import { FleetClockCap } from "./FleetClockCap";
 import { FleetAlertStrip } from "./FleetAlertStrip";
 import { FleetTokenTotals } from "./FleetTokenTotals";
 import { FleetKpis } from "./FleetKpis";
@@ -324,6 +325,7 @@ export function OverviewPage({
         </div>
         <FleetKpis sparks={visibleSparks} snapshotKey={sparks} />
         <div className="ov-side">
+          <FleetClockCap sparks={sparks} />
           {showFleetEnergy ? <FleetEnergyCard nodeCount={sparks.length} nodeNames={Object.fromEntries(sparks.map((s) => [s.id, s.name]))} onOpenDetails={onNavigate ? () => onNavigate(ENERGY_ID) : undefined} /> : null}
           {showLlmTokenTotals ? <FleetTokenTotals onOpenDetails={onNavigate ? () => onNavigate(TOKENS_ID) : undefined} /> : null}
           <section className="panel ov-card" aria-label="Recent activity">
