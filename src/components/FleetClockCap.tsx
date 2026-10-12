@@ -5,18 +5,18 @@ import {
   fetchFleetClockAuto,
   setClockCap,
   setFleetClockAuto,
-} from "../../api/client";
+} from "../api/client";
 import type {
   ClockCapResult,
   ClockCapSparkStatus,
   FleetClockAutoState,
   SparkSnapshot,
-} from "../../api/types";
-import { useModalPresence } from "../../hooks/useModalPresence";
-import { useFocusTrap } from "../../hooks/useFocusTrap";
-import { Panel } from "../ui/Panel";
-import { Tag } from "../ui/Tag";
-import { GaugeIcon, RotateIcon, ThermometerIcon, XIcon } from "../ui/icons";
+} from "../api/types";
+import { useModalPresence } from "../hooks/useModalPresence";
+import { useFocusTrap } from "../hooks/useFocusTrap";
+import { Panel } from "./ui/Panel";
+import { Tag } from "./ui/Tag";
+import { GaugeIcon, RotateIcon, ThermometerIcon, XIcon } from "./ui/icons";
 
 /** Preset caps in MHz. The server rejects anything outside this exact list. */
 const PRESETS = [1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400];
