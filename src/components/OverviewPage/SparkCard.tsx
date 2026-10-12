@@ -13,7 +13,6 @@ import { idToPath } from "../../constants";
 import { VramBreakdownBar } from "../ui/VramBreakdownBar";
 import { computeVramBreakdown, type VramBreakdownContext } from "../../shared/vramBreakdown";
 import { ImageIcon, PowerOnIcon, StopIcon } from "../ui/icons";
-import { ConfirmShutdownDialog } from "../ConfirmShutdownDialog";
 import { formatCtx } from "./fleetStats";
 import { ModelLauncher } from "./ModelLauncher";
 
@@ -90,7 +89,6 @@ function SparkCardImpl({
   const llm = llmIdx >= 0 ? llmList[llmIdx] : null;
   const [wakeMsg, setWakeMsg] = useState<string | null>(null);
   const [waking, setWaking] = useState(false);
-  const [unloadOpen, setUnloadOpen] = useState(false);
   const [unloading, setUnloading] = useState(false);
   const [unloadMsg, setUnloadMsg] = useState<string | null>(null);
 
@@ -151,12 +149,15 @@ function SparkCardImpl({
   // launcher states so the card reflects "stopped" without waiting for a probe.
   async function onUnload() {
     setUnloading(true);
-    setUnloadMsg(null);
+    setUnloadMsg("Stopping…");
     try {
       const res = await stopAllLlms([spark.id]);
       const entry = res.results[0];
       if (!entry?.ok) throw new Error(entry?.error ?? "Stop failed");
       invalidateLaunchers(spark.id);
+      const n = entry.stopped?.length ?? 0;
+      setUnloadMsg(n === 0 ? "Nothing was serving" : `Unloaded ${entry.stopped!.join(", ")}`);
+      window.setTimeout(() => setUnloadMsg(null), 6000);
     } catch (err) {
       setUnloadMsg(err instanceof Error ? err.message : "Stop failed");
     } finally {
@@ -398,11 +399,11 @@ function SparkCardImpl({
                   type="button"
                   className="btn btn--sm btn--danger ov-modelrow__stop"
                   disabled={unloading}
-                  onClick={() => setUnloadOpen(true)}
-                  title="Stop serving: runs the model's stop script on the Spark, freeing VRAM"
+                  onClick={() => void onUnload()}
+                  title="Stop serving on this Spark (one click; frees VRAM)"
                 >
                   <StopIcon className="h-3.5 w-3.5" />
-                  Unload
+                  {unloading ? "Stopping…" : "Unload"}
                 </button>
               ) : null}
             </div>
@@ -420,19 +421,6 @@ function SparkCardImpl({
         </>
       )}
 
-      <ConfirmShutdownDialog
-        open={unloadOpen}
-        onClose={() => setUnloadOpen(false)}
-        onConfirm={onUnload}
-        title={`Unload ${spark.name}`}
-        description={`Stop serving ${modelText ?? "the model"} on ${spark.name}? The model's stop script runs on the Spark — the engine exits and its VRAM is freed.`}
-        confirmLabel="Stop serving"
-        confirmPhrase="unload"
-        busyLabel="Stopping…"
-        warnings={["In-flight LLM requests are dropped."]}
-        note="The engine process exits; nothing powers off. Start a model again at any time."
-        ackText="I understand in-flight requests will be dropped."
-      />
     </div>
   );
 }
