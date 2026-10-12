@@ -1,16 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { stopAllLlms } from "../api/client";
-import { ConfirmShutdownDialog } from "./ConfirmShutdownDialog";
 import { StopIcon } from "./ui/icons";
 
 /**
- * "Stop all LLMs" with its confirmation and result message, next to "Shut down all"
- * in the Overview header. Runs the registered stop script of every launcher the
- * status probe reports running, on every Spark — the engines exit and their VRAM
- * is freed. This is the fleet-wide form of a Spark card's Unload control.
+ * "Stop all LLMs" next to "Shut down all" in the Overview header.
+ * One click (no confirm): stops registered launchers and TensorFold/recipe
+ * Docker containers on every Spark so VRAM is freed.
  */
 export function StopAllLlms({ className = "" }: { className?: string }) {
-  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; tone: "ok" | "err" } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -18,12 +15,15 @@ export function StopAllLlms({ className = "" }: { className?: string }) {
 
   async function run() {
     setBusy(true);
-    setMsg(null);
+    setMsg({ text: "Stopping…", tone: "ok" });
     try {
       const res = await stopAllLlms("all");
       const fail = res.results.filter((r) => !r.ok).length;
       const stopped = res.results.reduce((n, r) => n + (r.stopped?.length ?? 0), 0);
-      const parts = [`${stopped} model${stopped === 1 ? "" : "s"} unloaded`];
+      const parts =
+        stopped === 0 && fail === 0
+          ? ["Nothing was serving"]
+          : [`${stopped} model${stopped === 1 ? "" : "s"} unloaded`];
       if (fail) parts.push(`${fail} Spark${fail === 1 ? "" : "s"} failed`);
       setMsg({ text: parts.join(", "), tone: fail === 0 ? "ok" : "err" });
     } catch (err: unknown) {
@@ -44,27 +44,14 @@ export function StopAllLlms({ className = "" }: { className?: string }) {
       ) : null}
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => void run()}
         disabled={busy}
-        title="Stop every running model: each launcher's stop script runs on its Spark, freeing VRAM"
+        title="Stop every running model on every Spark (one click; frees VRAM)"
         className={`btn ${className}`}
       >
         <StopIcon className="h-3.5 w-3.5" />
-        Stop all LLMs
+        {busy ? "Stopping…" : "Stop all LLMs"}
       </button>
-      <ConfirmShutdownDialog
-        open={open}
-        onClose={() => setOpen(false)}
-        onConfirm={run}
-        title="Stop all LLMs"
-        description="Stop serving on every Spark? Each model's stop script runs on its Spark — the engines exit and their VRAM is freed."
-        confirmLabel="Stop all LLMs"
-        confirmPhrase="unload"
-        busyLabel="Stopping…"
-        warnings={["In-flight LLM requests are dropped."]}
-        note="The engine processes exit; nothing powers off. Start a model again at any time."
-        ackText="I understand in-flight requests will be dropped."
-      />
     </>
   );
 }

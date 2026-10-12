@@ -91,7 +91,7 @@ describe("SparkCard", () => {
     expect(container.textContent).toContain("models-fallback");
   });
 
-  it("offers Unload while serving and confirms before running the stop script", async () => {
+  it("offers Unload while serving and one click runs the stop with no confirm dialog", async () => {
     vi.mocked(stopAllLlms).mockResolvedValue({
       success: true,
       results: [{ id: "h", name: "Spark h", ok: true, stopped: ["big-model"] }],
@@ -100,25 +100,13 @@ describe("SparkCard", () => {
 
     const unload = Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.includes("Unload"));
     expect(unload).toBeDefined();
-    act(() => unload!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-    const sheet = document.body.querySelector<HTMLDivElement>('[role="dialog"]')!;
-    expect(sheet.textContent).toContain("Stop serving big-model on Spark h");
-    expect(stopAllLlms).not.toHaveBeenCalled();
-
-    const phrase = sheet.querySelector<HTMLInputElement>("input.field-input--mono")!;
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    act(() => {
-      setter?.call(phrase, "unload");
-      phrase.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    act(() => sheet.querySelector<HTMLInputElement>(".check-row input")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
     await act(async () => {
-      Array.from(sheet.querySelectorAll("button"))
-        .find((b) => b.textContent?.trim() === "Stop serving")!
-        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      unload!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(stopAllLlms).toHaveBeenCalledTimes(1);
     expect(stopAllLlms).toHaveBeenCalledWith(["h"]);
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it("does not offer Unload without a serving model", () => {

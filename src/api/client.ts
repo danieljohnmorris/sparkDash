@@ -576,15 +576,15 @@ export interface LlmStopAllResult {
   error?: string;
 }
 
-/** Stop every running LLM launcher on the targeted Spark(s). */
+/** Stop serving on the targeted Spark(s): launchers and TensorFold/recipe containers. */
 export interface LlmStopAllResponse {
   success: boolean;
   results: LlmStopAllResult[];
 }
 
 /**
- * Stop serving: run the registered stop script of every launcher the probe
- * reports running — on one Spark (unload) or across the fleet.
+ * Stop serving: launcher stop.sh when registered, plus known Docker serve
+ * containers (TensorFold/GLM) — on one Spark (unload) or across the fleet.
  */
 export function stopAllLlms(sparkIds: string[] | "all"): Promise<LlmStopAllResponse> {
   return apiFetch("/api/sparks/llm-stop-all", { method: "POST", body: JSON.stringify({ sparkIds }) });

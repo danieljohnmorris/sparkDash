@@ -1,5 +1,12 @@
 # Changelog
 
+## SPARK-10 — Fix Unload (one click, TensorFold/docker)
+
+- Unload / Stop all LLMs now stop known recipe Docker containers (e.g. `glm53-flash-tf`) over SSH when no sparkDash launchers are registered — the SPARK-9 empty-`stopped` false success.
+- Removed the type-`unload` confirm dialog: one click shows progress and the result.
+- If `:8888` still answers and nothing was stopped, the API returns an error instead of silent success.
+
+
 All notable changes to **sparkDash** are documented here.  
 The README [Latest version changelog](./README.md#latest-version-changelog) always reflects only the current release; this file keeps the full history.
 

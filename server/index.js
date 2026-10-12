@@ -66,6 +66,7 @@ import { EventLog } from "./events/EventLog.js";
 import { GpuHistory, deviceReadings } from "./metrics/GpuHistory.js";
 import { LauncherStore } from "./llmlaunch/LauncherStore.js";
 import { LauncherManager } from "./llmlaunch/LauncherManager.js";
+import { stopServingContainers } from "./llmlaunch/serveStop.js";
 import { ToolEvalStore } from "./tooleval/ToolEvalStore.js";
 import { ToolEvalManager } from "./tooleval/ToolEvalManager.js";
 import { registerToolEvalRoutes } from "./tooleval/routes.js";
@@ -971,7 +972,7 @@ function waitForLauncherJob(sparkId, jobId, timeoutMs) {
 /**
  * Batch route (3 segments, like shutdown-all) so it can never be captured by a
  * future /api/sparks/:id/* path. Stops every launcher the status probe reports
- * RUNNING — the same stop.sh the Models panel runs — on one Spark or fleet-wide.
+ * RUNNING (launcher stop.sh) and known TensorFold/recipe Docker containers — on one Spark or fleet-wide.
  */
 app.post("/api/sparks/llm-stop-all", async (req, res) => {
   if (!allowDestructive(principalKey(req)) || !allowGlobalDestructive(clientKey(req))) {
@@ -998,36 +999,60 @@ app.post("/api/sparks/llm-stop-all", async (req, res) => {
       results.push(entry);
       try {
         const launchers = launcherStore.list(spark.id);
-        if (launchers.length === 0) return; // nothing registered, nothing to stop
-        const statuses = await cachedLauncherStatuses(spark, launchers);
-        const running = launchers.filter((l) => statuses[l.id] === "running");
-        if (running.length === 0) {
-          // All-unknown means the SSH probe itself failed: stopping nothing would be silent success.
-          if (launchers.every((l) => statuses[l.id] === "unknown")) {
-            entry.ok = false;
-            entry.error = "Could not read the launcher states over SSH";
+        if (launchers.length > 0) {
+          const statuses = await cachedLauncherStatuses(spark, launchers);
+          const running = launchers.filter((l) => statuses[l.id] === "running");
+          if (running.length === 0) {
+            // All-unknown means the SSH probe itself failed: stopping nothing would be silent success.
+            if (launchers.every((l) => statuses[l.id] === "unknown")) {
+              entry.ok = false;
+              entry.error = "Could not read the launcher states over SSH";
+              return;
+            }
           }
-          return;
+          for (const launcher of running) {
+            const started = launcherManager.startJob(spark, launcher, "stop");
+            if (!started.ok) {
+              entry.ok = false;
+              entry.error = `Could not stop ${launcher.name}: another job is running`;
+              return;
+            }
+            const done = await waitForLauncherJob(spark.id, started.job.id, LLM_STOP_ALL_WAIT_MS);
+            if (!done.ok) {
+              entry.ok = false;
+              entry.error = `Stop script for ${launcher.name} failed${done.exitCode != null ? ` (exit ${done.exitCode})` : ""}`;
+              return;
+            }
+            entry.stopped.push(launcher.name);
+          }
+          launcherStatusCache.delete(spark.id);
         }
-        for (const launcher of running) {
-          const started = launcherManager.startJob(spark, launcher, "stop");
-          if (!started.ok) {
+        // SPARK-10: TensorFold/GLM (and other recipe containers) are started outside
+        // sparkDash launchers — zero pidfiles. Always try docker serve-stop so Unload
+        // is not a silent no-op when launchers are empty.
+        let dockerStop = { stopped: [], servingPort: false };
+        try {
+          dockerStop = await stopServingContainers(spark, sshExec, { timeoutMs: LLM_STOP_ALL_WAIT_MS });
+        } catch (dockerErr) {
+          // SSH/docker probe failed. Fatal only when launchers also stopped nothing —
+          // otherwise keep the launcher success (unit tests use a local Spark without docker SSH).
+          if (entry.stopped.length === 0) {
             entry.ok = false;
-            entry.error = `Could not stop ${launcher.name}: another job is running`;
+            entry.error = dockerErr instanceof Error ? dockerErr.message : String(dockerErr);
             return;
           }
-          const done = await waitForLauncherJob(spark.id, started.job.id, LLM_STOP_ALL_WAIT_MS);
-          if (!done.ok) {
-            entry.ok = false;
-            entry.error = `Stop script for ${launcher.name} failed${done.exitCode != null ? ` (exit ${done.exitCode})` : ""}`;
-            return;
-          }
-          entry.stopped.push(launcher.name);
         }
-        launcherStatusCache.delete(spark.id);
+        for (const name of dockerStop.stopped) {
+          if (!entry.stopped.includes(name)) entry.stopped.push(name);
+        }
+        if (dockerStop.servingPort && entry.stopped.length === 0) {
+          entry.ok = false;
+          entry.error = "LLM still answering on :8888; no launcher or known container to stop";
+        }
         // Nudge the LLM probe so the UI shows "not serving" and falling VRAM right away.
         const mon = monitors.get(spark.id);
         if (mon?.refreshDomain) await mon.refreshDomain("llm").catch(() => {});
+        if (mon?.refreshDomain) await mon.refreshDomain("gpu").catch(() => {});
       } catch (err) {
         entry.ok = false;
         entry.error = err instanceof Error ? err.message : String(err);
