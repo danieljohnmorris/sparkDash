@@ -2328,6 +2328,8 @@ app.post("/api/sparks/clock-cap/mode", async (req, res) => {
   }
   eventLog.flush();
   res.json({ success: true, mode: "auto", results });
+});
+
 // ─── Fleet-wide clock-cap auto mode ──────────────────────
 // One control for the whole fleet: while enabled, the controller holds a cap
 // (within 1800–2200 MHz) on any node whose GPU reaches 72 °C and releases it
