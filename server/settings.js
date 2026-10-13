@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { atomicWrite } from "./util/atomicWrite.js";
+import { CLOCK_CAP_PRESETS } from "./clockCap.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,6 +52,17 @@ const DEFAULTS = Object.freeze({
    * Off by default: when off the path answers 404.
    */
   prometheusExport: false,
+  /**
+   * SPARK-11: the fleet-wide GPU clock-cap target the last fleet apply asked
+   * for — `{ mode: "fixed", mhz }`, `{ mode: "unlocked", mhz: null }` or
+   * `{ mode: "auto", mhz }` (fleet Auto). null = nothing recorded, so the
+   * reconcile loop must not touch any node. The periodic reconcile re-applies
+   * this to nodes whose marker drifted (reboot, out-of-band -rgc, MHz change).
+   */
+  clockCapTarget: null,
+  /** SPARK-11: persisted fleet Auto controller state (survives restarts). */
+  fleetClockAutoEnabled: false,
+  fleetClockAutoCapMhz: 1800,
 });
 
 const POLL_INTERVAL_MIN_MS = 500;
@@ -105,6 +117,22 @@ function _clampSettings(settings) {
   // Ensure density is valid
   if (s.density !== "comfortable" && s.density !== "compact") {
     s.density = DEFAULTS.density;
+  }
+  // SPARK-11: the fleet clock-cap target must be exactly one of the shapes the
+  // routes write; anything else (junk from a hand edit) means "no target".
+  const t = s.clockCapTarget;
+  if (
+    !t ||
+    typeof t !== "object" ||
+    (t.mode !== "fixed" && t.mode !== "unlocked" && t.mode !== "auto") ||
+    !Number.isInteger(t.mhz) ||
+    !CLOCK_CAP_PRESETS.includes(t.mhz)
+  ) {
+    s.clockCapTarget = null;
+  }
+  s.fleetClockAutoEnabled = Boolean(s.fleetClockAutoEnabled);
+  if (!Number.isInteger(s.fleetClockAutoCapMhz) || !CLOCK_CAP_PRESETS.includes(s.fleetClockAutoCapMhz)) {
+    s.fleetClockAutoCapMhz = DEFAULTS.fleetClockAutoCapMhz;
   }
   return s;
 }

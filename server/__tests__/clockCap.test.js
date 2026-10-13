@@ -5,18 +5,21 @@
  * node-side $(cat boot_id) capture.
  */
 import assert from "node:assert/strict";
-import test from "node:test";
+import childProcess from "node:child_process";
+import test, { mock } from "node:test";
 
 import {
   CLOCK_CAP_PRESETS,
   NVSMI,
   applyCapCommand,
+  applyClockCap,
   parseClockCap,
   parseClocksGr,
   parseMarkerLine,
   removeMarkerCommand,
   revertCapCommand,
   resolveCapStatus,
+  runOnSpark,
   splitStatusSections,
   statusCommand,
   writeMarkerCommand,
@@ -109,4 +112,83 @@ test("splitStatusSections splits marker / boot_id / clocks", () => {
   assert.equal(marker.trim(), `1800 ${FRESH_BOOT}`);
   assert.equal(bootId.trim(), FRESH_BOOT);
   assert.equal(clocks.trim(), "1795");
+});
+
+// ─── SPARK-11: the local (isLocal) branch ─────────────────
+// spark2 is the host running sparkDash: the cap must reach it through the
+// host-user drop (nsenter/setpriv), not SSH. execFile is stubbed so no real
+// nvidia-smi or sudo is touched.
+
+/** A local spark like spark2 — the node running the dashboard itself. */
+const LOCAL_SPARK = { id: "spark2", name: "spark2", isLocal: true, ssh: { user: "dan" } };
+
+test("runOnSpark local branch shells the command out via execFile on this host", async () => {
+  const calls = [];
+  const descriptor = mock.method(childProcess, "execFile", (file, args, opts, cb) => {
+    calls.push({ file, args, opts });
+    setImmediate(() => cb(null, "ok-out\n", ""));
+  });
+  try {
+    const out = await runOnSpark(LOCAL_SPARK, `${NVSMI} --query-gpu=name`);
+    assert.equal(out, "ok-out");
+    assert.equal(calls.length, 1);
+    // Every local invocation ends with the sh -c script; the command must
+    // reach it verbatim whether the path is nsenter, setpriv or plain sh.
+    assert.ok(calls[0].args.at(-1).includes(`${NVSMI} --query-gpu=name`));
+    assert.equal(calls[0].opts.timeout, 12000);
+  } finally {
+    descriptor.mock.restore();
+  }
+});
+
+test("runOnSpark local branch surfaces exec failures verbatim", async () => {
+  const descriptor = mock.method(childProcess, "execFile", (file, args, opts, cb) => {
+    setImmediate(() => cb(new Error("spawn failed"), "", "sudo: a password is required"));
+  });
+  try {
+    await assert.rejects(() => runOnSpark(LOCAL_SPARK, `${NVSMI} -rgc`), /sudo: a password is required/);
+  } finally {
+    descriptor.mock.restore();
+  }
+});
+
+test("applyClockCap on the local host: -lgc, then marker write + fresh status", async () => {
+  const scripts = [];
+  const descriptor = mock.method(childProcess, "execFile", (file, args, opts, cb) => {
+    const script = args.at(-1);
+    scripts.push(script);
+    const stdout = script.includes("-lgc")
+      ? "Setting GPU clocks to 2000 and 2000."
+      : `2000 ${FRESH_BOOT}\n---\n${FRESH_BOOT}\n---\n1998\n---\n42\n`;
+    setImmediate(() => cb(null, stdout, ""));
+  });
+  try {
+    const status = await applyClockCap(LOCAL_SPARK, 2000);
+    assert.equal(status.mhz, 2000);
+    assert.equal(status.graphicsClockMHz, 1998);
+    assert.equal(scripts.length, 2);
+    assert.match(scripts[0], /-lgc 0,2000/);
+    // The marker write and status read happen in the second round trip.
+    assert.match(scripts[1], /gpu-clock-cap/);
+    assert.match(scripts[1], /boot_id/);
+  } finally {
+    descriptor.mock.restore();
+  }
+});
+
+test("applyClockCap on the local host reports a marker write that did not land", async () => {
+  const descriptor = mock.method(childProcess, "execFile", (file, args, opts, cb) => {
+    const script = args.at(-1);
+    // Second round trip returns an empty marker: the cap "applied" but the
+    // marker never landed — must throw, not show a cap the display can't see.
+    const stdout = script.includes("-lgc")
+      ? "Setting GPU clocks to 2000 and 2000."
+      : `---\n${FRESH_BOOT}\n---\n1998\n`;
+    setImmediate(() => cb(null, stdout, ""));
+  });
+  try {
+    await assert.rejects(() => applyClockCap(LOCAL_SPARK, 2000), /marker write failed/);
+  } finally {
+    descriptor.mock.restore();
+  }
 });

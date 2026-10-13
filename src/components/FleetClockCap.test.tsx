@@ -173,4 +173,66 @@ describe("FleetClockCap", () => {
     expect(alert?.textContent).toContain("Clock cap failed");
     expect(alert?.textContent).toContain("ssh: connection refused");
   });
+
+  // ─── SPARK-11: on-load preselect from GET /api/sparks/clock-cap ───
+
+  it("highlights the preset matching the fleet's uniform cap on load", async () => {
+    vi.mocked(fetchClockCap).mockResolvedValue({
+      success: true,
+      sparks: [okStatus("a", { mhz: 2000 }), okStatus("b", { mhz: 2000 })],
+    });
+    const { container } = render(<FleetClockCap sparks={[spark("a", 60), spark("b", 61)]} />);
+    await flush();
+
+    expect(presetButton(container, "2000").getAttribute("aria-pressed")).toBe("true");
+    expect(presetButton(container, "1800").getAttribute("aria-pressed")).toBe("false");
+    expect(presetButton(container, "Unlocked").getAttribute("aria-pressed")).toBe("false");
+    expect(container.textContent).not.toContain("Mixed");
+  });
+
+  it("highlights Unlocked when every node reports stock clocks", async () => {
+    vi.mocked(fetchClockCap).mockResolvedValue({
+      success: true,
+      sparks: [okStatus("a"), okStatus("b")],
+    });
+    const { container } = render(<FleetClockCap sparks={[spark("a", 60), spark("b", 61)]} />);
+    await flush();
+
+    expect(presetButton(container, "Unlocked").getAttribute("aria-pressed")).toBe("true");
+    expect(presetButton(container, "2000").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("shows Mixed and highlights nothing when the nodes' caps differ", async () => {
+    vi.mocked(fetchClockCap).mockResolvedValue({
+      success: true,
+      sparks: [okStatus("a", { mhz: 2000 }), okStatus("b", { mhz: 1800 })],
+    });
+    const { container } = render(<FleetClockCap sparks={[spark("a", 60), spark("b", 61)]} />);
+    await flush();
+
+    expect(container.textContent).toContain("Mixed");
+    for (const label of ["1500", "1800", "1900", "2000", "2100", "2200", "Unlocked"]) {
+      expect(presetButton(container, label).getAttribute("aria-pressed")).toBe("false");
+    }
+  });
+
+  it("shows the Auto toggle on when every node is in Auto and the saved hold cap in the dropdown", async () => {
+    vi.mocked(fetchClockCap).mockResolvedValue({
+      success: true,
+      sparks: [
+        okStatus("a", { mhz: 2000, auto: { enabled: true, cap: 2000, lastTempC: 60, lastStep: null, log: [], lastError: null } }),
+        okStatus("b", { mhz: 2000, auto: { enabled: true, cap: 2000, lastTempC: 61, lastStep: null, log: [], lastError: null } }),
+      ],
+    });
+    vi.mocked(fetchFleetClockAuto).mockResolvedValue(autoState({ enabled: false, capMhz: 2100 }));
+    const { container } = render(<FleetClockCap sparks={[spark("a", 60), spark("b", 61)]} />);
+    await flush();
+
+    const toggle = [...container.querySelectorAll<HTMLButtonElement>(".ov-cap__toggle")][0];
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(toggle.textContent).toContain("Auto on");
+
+    const select = container.querySelector<HTMLSelectElement>(".ov-cap__capselect select");
+    expect(select?.value).toBe("2100");
+  });
 });

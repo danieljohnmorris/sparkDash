@@ -1,5 +1,12 @@
 # Changelog
 
+## SPARK-11 — Fleet GPU clock cap: apply locally, reconcile drift, show real state
+
+- The fleet clock-cap target (fixed MHz / Unlocked / Auto) is persisted in `config/settings.json` and a reconcile loop (`server/clockCapReconcile.js`, same cadence as the Auto tick) re-applies it to any Spark whose status drifted — stale marker after a reboot, an out-of-band `nvidia-smi -rgc`, or a mismatched MHz — recording a `gpu.clockcap.reapplied` event. It stands down while fleet Auto owns the fleet and skips per-node Auto.
+- Fleet Auto state (toggle + hold cap) is persisted too and restored on boot, so the Settings controls no longer reset to "off / 1800" after a restart.
+- The hold cap is labelled **Auto-only**: with Auto off, changing it applies nothing to the GPUs.
+- Settings preselects the real state on load from `GET /api/sparks/clock-cap`: the matching preset (or Unlocked) is highlighted, differing nodes show **Mixed**, and the Auto toggle shows on when every node is in Auto.
+
 ## SPARK-10 — Fix Unload (one click, TensorFold/docker)
 
 - Unload / Stop all LLMs now stop known recipe Docker containers (e.g. `glm53-flash-tf`) over SSH when no sparkDash launchers are registered — the SPARK-9 empty-`stopped` false success.
