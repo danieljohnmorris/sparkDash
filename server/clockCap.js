@@ -15,7 +15,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import childProcess from "node:child_process";
 import { HOST_PATHS } from "./config.js";
 import { sshExec } from "./collectors/ssh.js";
 import { chooseLocalInvocation } from "./collectors/HermesProbe.js";
@@ -237,7 +237,9 @@ export async function runOnSpark(spark, cmd, timeoutMs = 12000) {
     cmd,
   });
   return new Promise((resolve, reject) => {
-    execFile(inv.file, inv.args, { timeout: timeoutMs }, (err, stdout, stderr) => {
+    // Property access on the module object (not an imported binding) so tests
+    // can stub the local branch with mock.method(childProcess, "execFile").
+    childProcess.execFile(inv.file, inv.args, { timeout: timeoutMs }, (err, stdout, stderr) => {
       if (err) {
         reject(new Error(stderr?.trim() || err.message));
       } else {

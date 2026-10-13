@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -31,11 +31,15 @@ async function waitForListening(output, timeoutMs) {
   throw new Error(`server did not start:\n${output()}`);
 }
 
-async function startServer(t) {
+async function startServer(t, { settings } = {}) {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "sparkdash-clockcap-auto-"));
   t.after(() => rm(tmp, { recursive: true, force: true }));
   const sparksPath = path.join(tmp, "sparks.json");
   await writeFile(sparksPath, '{"sparks":[]}\n');
+  const settingsPath = path.join(tmp, "settings.json");
+  // Optional prewritten settings: used to prove the persisted fleet clock-cap
+  // state is restored on boot (SPARK-11).
+  if (settings) await writeFile(settingsPath, JSON.stringify(settings) + "\n");
   const port = await freePort();
   const child = spawn(process.execPath, ["server/index.js"], {
     cwd: path.resolve(import.meta.dirname, "../.."),
@@ -45,7 +49,7 @@ async function startServer(t) {
       PORT: String(port),
       SPARKDASH_TOKEN: "",
       SPARKS_JSON_PATH: sparksPath,
-      SETTINGS_JSON_PATH: path.join(tmp, "settings.json"),
+      SETTINGS_JSON_PATH: settingsPath,
       SPARKS_SECRETS_PATH: path.join(tmp, "sparks-secrets.json"),
       SECRETS_KEY_PATH: path.join(tmp, ".secrets-key"),
       LLM_DAILY_JSON_PATH: path.join(tmp, "llm-daily.json"),
@@ -60,11 +64,11 @@ async function startServer(t) {
   child.stdout.on("data", (chunk) => (output += chunk));
   child.stderr.on("data", (chunk) => (output += chunk));
   await waitForListening(() => output, 15_000);
-  return `http://127.0.0.1:${port}`;
+  return { base: `http://127.0.0.1:${port}`, settingsPath };
 }
 
 test("GET /api/sparks/clock-cap/auto answers the default disabled state", async (t) => {
-  const base = await startServer(t);
+  const { base } = await startServer(t);
   const res = await fetch(`${base}/api/sparks/clock-cap/auto`);
   assert.equal(res.status, 200);
   const body = await res.json();
@@ -78,7 +82,7 @@ test("GET /api/sparks/clock-cap/auto answers the default disabled state", async 
 });
 
 test("POST /api/sparks/clock-cap/auto rejects non-boolean enabled and out-of-range caps", async (t) => {
-  const base = await startServer(t);
+  const { base } = await startServer(t);
   for (const body of [{}, { enabled: "yes" }, { enabled: 1 }]) {
     const res = await fetch(`${base}/api/sparks/clock-cap/auto`, {
       method: "POST",
@@ -101,7 +105,7 @@ test("POST /api/sparks/clock-cap/auto rejects non-boolean enabled and out-of-ran
 });
 
 test("POST /api/sparks/clock-cap/auto enables and disables the controller", async (t) => {
-  const base = await startServer(t);
+  const { base } = await startServer(t);
 
   const enable = await fetch(`${base}/api/sparks/clock-cap/auto`, {
     method: "POST",
@@ -125,4 +129,43 @@ test("POST /api/sparks/clock-cap/auto enables and disables the controller", asyn
   });
   assert.equal(disable.status, 200);
   assert.equal((await disable.json()).enabled, false);
+});
+
+test("POST /api/sparks/clock-cap/auto persists the fleet state to config (SPARK-11)", async (t) => {
+  const { base, settingsPath } = await startServer(t);
+
+  const enable = await fetch(`${base}/api/sparks/clock-cap/auto`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: true, capMhz: 2000 }),
+  });
+  assert.equal(enable.status, 200);
+
+  // The persisted settings file carries the mode + cap, so a restart can
+  // restore the toggle and hold cap.
+  const persisted = JSON.parse(await readFile(settingsPath, "utf8"));
+  assert.equal(persisted.fleetClockAutoEnabled, true);
+  assert.equal(persisted.fleetClockAutoCapMhz, 2000);
+  assert.deepEqual(persisted.clockCapTarget, { mode: "auto", mhz: 2000 });
+
+  const disable = await fetch(`${base}/api/sparks/clock-cap/auto`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: false }),
+  });
+  assert.equal(disable.status, 200);
+  const persistedOff = JSON.parse(await readFile(settingsPath, "utf8"));
+  assert.equal(persistedOff.fleetClockAutoEnabled, false);
+  assert.equal(persistedOff.clockCapTarget, null);
+});
+
+test("GET /api/sparks/clock-cap/auto answers the persisted state after a restart (SPARK-11)", async (t) => {
+  const { base } = await startServer(t, {
+    settings: { fleetClockAutoEnabled: true, fleetClockAutoCapMhz: 2000 },
+  });
+  const res = await fetch(`${base}/api/sparks/clock-cap/auto`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.enabled, true, "the saved Auto toggle must be restored on boot");
+  assert.equal(body.capMhz, 2000, "the saved hold cap must be restored on boot");
 });

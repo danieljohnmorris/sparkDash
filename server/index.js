@@ -32,7 +32,8 @@ import {
   CLOCK_CAP_PRESETS,
 } from "./clockCap.js";
 import { ClockCapAutoController } from "./clockCapAuto.js";
-import { FleetClockAuto, parseFleetAutoCap } from "./clockCapAuto.js";
+import { FleetClockAuto, parseFleetAutoCap, AUTO_RANGE } from "./clockCapAuto.js";
+import { FleetClockCapReconciler } from "./clockCapReconcile.js";
 import {
   decodeBenchManager,
   DECODE_BENCH_DEFAULTS,
@@ -445,6 +446,21 @@ const fleetClockAuto = new FleetClockAuto({
   apply: applyClockCap,
   revert: revertClockCap,
   recordEvent,
+});
+
+// ─── Fleet clock-cap reconcile (SPARK-11) ────────────────
+// Re-applies the persisted fleet target (settings.clockCapTarget) to any Spark
+// whose cap status drifted: stale marker after a reboot, an out-of-band
+// nvidia-smi -rgc, or a mismatched MHz. Nodes in per-node Auto are owned by
+// clockCapAuto and skipped.
+const clockCapReconciler = new FleetClockCapReconciler({
+  sparks: () => registry.sparks,
+  target: () => getSettings().clockCapTarget,
+  readStatus: readClockCapStatus,
+  apply: applyClockCap,
+  revert: revertClockCap,
+  recordEvent,
+  skip: (spark) => clockCapAuto.isEnabled(spark.id),
 });
 
 // ─── Start monitor for a Spark ───────────────────────────
@@ -2361,6 +2377,19 @@ app.post("/api/sparks/clock-cap", async (req, res) => {
     return rejectLimited(res, "Too many clock-cap requests; try again shortly");
   }
 
+  // SPARK-11: a fleet-wide apply is remembered as the fleet target, so the
+  // reconcile loop can repair drift (rebooted Spark, out-of-band -rgc, MHz
+  // change). Persisted even when a node fails below — the reconcile retries
+  // that node until the cap lands. Per-node (subset) applies don't move it.
+  const fleetWide =
+    all ||
+    (Array.isArray(bodyIds) && registry.sparks.length > 0 && targets.length === registry.sparks.length);
+  if (fleetWide) {
+    updateSettings({
+      clockCapTarget: { mode: unlocking ? "unlocked" : "fixed", mhz: unlocking ? null : mhz },
+    });
+  }
+
   const results = [];
   for (const spark of targets) {
     const entry = { id: spark.id, name: spark.name };
@@ -2470,6 +2499,13 @@ app.post("/api/sparks/clock-cap/auto", async (req, res) => {
   }
   try {
     const status = await fleetClockAuto.setEnabled(enabled, capMhz);
+    // SPARK-11: persist the fleet Auto state so a restart restores the toggle
+    // and hold cap; while Auto owns the fleet the reconcile loop stands down.
+    updateSettings({
+      clockCapTarget: enabled ? { mode: "auto", mhz: status.capMhz } : null,
+      fleetClockAutoEnabled: enabled,
+      fleetClockAutoCapMhz: status.capMhz,
+    });
     recordEvent({
       type: enabled ? "gpu.clockcap.auto.enabled" : "gpu.clockcap.auto.disabled",
       severity: "info",
@@ -2669,6 +2705,20 @@ if (!startupPreflight.fatal) {
     // Re-adopt Auto nodes from their gpu-clock-mode markers, then tick.
     clockCapAuto.start(registry);
     fleetClockAuto.start();
+    // SPARK-11: restore the persisted fleet Auto state so the Settings toggle
+    // and hold-cap dropdown show the saved values after a restart, and run
+    // the reconcile loop against the persisted fleet target.
+    const savedAuto = getSettings();
+    if (
+      savedAuto.fleetClockAutoEnabled &&
+      savedAuto.fleetClockAutoCapMhz >= AUTO_RANGE.min &&
+      savedAuto.fleetClockAutoCapMhz <= AUTO_RANGE.max
+    ) {
+      fleetClockAuto.setEnabled(true, savedAuto.fleetClockAutoCapMhz).catch((err) => {
+        console.error("[sparkDash] failed to restore fleet clock-cap auto:", err.message);
+      });
+    }
+    clockCapReconciler.start();
   });
 } else {
   process.exitCode = 1;
@@ -2702,6 +2752,7 @@ async function shutdown(signal) {
     console.error("[sparkDash] failed to stop launcher watchers:", err.message);
   }
   clockCapAuto.stop();
+  clockCapReconciler.stop();
   try {
     eventLog.flush();
   } catch (err) {
