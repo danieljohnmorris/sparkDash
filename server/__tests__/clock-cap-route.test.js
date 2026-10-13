@@ -32,11 +32,11 @@ async function waitForListening(output, timeoutMs) {
   throw new Error(`server did not start:\n${output()}`);
 }
 
-async function startServer(t) {
+async function startServer(t, sparksJson = '{"sparks":[]}\n') {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "sparkdash-clockcap-"));
   t.after(() => rm(tmp, { recursive: true, force: true }));
   const sparksPath = path.join(tmp, "sparks.json");
-  await writeFile(sparksPath, '{"sparks":[]}\n');
+  await writeFile(sparksPath, sparksJson);
   const port = await freePort();
   const child = spawn(process.execPath, ["server/index.js"], {
     cwd: path.resolve(import.meta.dirname, "../.."),
@@ -106,4 +106,58 @@ test("GET /api/sparks/clock-cap/presets mirrors the preset list", async (t) => {
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.deepEqual(body.presets, [1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400]);
+});
+
+test("POST /api/sparks/clock-cap/mode rejects anything but auto and an empty fleet", async (t) => {
+  const base = await startServer(t);
+
+  const badMode = await fetch(`${base}/api/sparks/clock-cap/mode`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sparkIds: "all", mode: "turbo" }),
+  });
+  assert.equal(badMode.status, 400);
+  assert.match((await badMode.json()).error, /mode must be "auto"/);
+
+  const noFleet = await fetch(`${base}/api/sparks/clock-cap/mode`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sparkIds: "all", mode: "auto" }),
+  });
+  assert.equal(noFleet.status, 400);
+  assert.match((await noFleet.json()).error, /No matching Sparks/);
+});
+
+test("a fleet-wide clock-cap choice persists the fleet target (SPARK-11)", async (t) => {
+  // spark2 is the local host — the fleet apply must include it (its per-node
+  // result may fail here: the test env has no nvidia-smi), and the choice must
+  // land in settings so the reconcile tick can re-enforce it.
+  const base = await startServer(
+    t,
+    '{"sparks":[{"id":"spark2","name":"spark2","kind":"host","isLocal":true,"ssh":{"user":"dan"}}]}\n'
+  );
+  const post = (body) =>
+    fetch(`${base}/api/sparks/clock-cap`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const target = async () => (await (await fetch(`${base}/api/settings`)).json()).clockCapTarget;
+
+  await post({ sparkIds: "all", mhz: 2000 });
+  assert.deepEqual(await target(), { mode: "fixed", mhz: 2000 });
+
+  await post({ sparkIds: "all", mhz: null });
+  assert.deepEqual(await target(), { mode: "unlocked", mhz: null });
+
+  await fetch(`${base}/api/sparks/clock-cap/mode`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sparkIds: "all", mode: "auto" }),
+  });
+  assert.deepEqual(await target(), { mode: "auto", mhz: null });
+
+  // A single-Spark choice must NOT overwrite the fleet target.
+  await post({ sparkIds: ["spark2"], mhz: 1800 });
+  assert.deepEqual(await target(), { mode: "auto", mhz: null });
 });

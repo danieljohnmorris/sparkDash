@@ -31,6 +31,7 @@ import {
   parseClockCap,
   CLOCK_CAP_PRESETS,
 } from "./clockCap.js";
+import { ClockCapAutoController } from "./clockCapAuto.js";
 import {
   decodeBenchManager,
   DECODE_BENCH_DEFAULTS,
@@ -354,6 +355,12 @@ function recordEvent(event) {
     return null;
   }
 }
+
+// ─── Auto clock cap controller (SPARK-6) ─────────────────
+// One loop over all nodes in Auto mode: polls each node's GPU temp every ~10 s
+// and steps the cap 1800–2200 MHz by 100 MHz with 72/67 °C hysteresis (see
+// server/clockCapAuto.js). Shares the clock-cap routes' sudoers rule.
+const clockCapAuto = new ClockCapAutoController({ onEvent: (event) => recordEvent(event) });
 
 for (const [mgr] of [[decodeBenchManager], [prefillBenchManager], [qualityBenchManager]]) {
   mgr.setEventSink((kind, job) => {
@@ -2171,7 +2178,13 @@ app.get("/api/sparks/clock-cap", async (req, res) => {
       targets.map(async (spark) => {
         try {
           const status = await readClockCapStatus(spark);
-          return { id: spark.id, name: spark.name, ok: true, ...status };
+          return {
+            id: spark.id,
+            name: spark.name,
+            ok: true,
+            ...status,
+            auto: clockCapAuto.publicState(spark.id),
+          };
         } catch (err) {
           return { id: spark.id, name: spark.name, ok: false, error: err.message || String(err) };
         }
@@ -2216,6 +2229,9 @@ app.post("/api/sparks/clock-cap", async (req, res) => {
   for (const spark of targets) {
     const entry = { id: spark.id, name: spark.name };
     try {
+      // A preset / Unlocked choice turns Auto off for that node first, so the
+      // controller never fights the manual cap (SPARK-6).
+      if (clockCapAuto.isEnabled(spark.id)) await clockCapAuto.disable(spark);
       const status = unlocking ? await revertClockCap(spark) : await applyClockCap(spark, mhz);
       results.push({
         ...entry,
@@ -2246,12 +2262,66 @@ app.post("/api/sparks/clock-cap", async (req, res) => {
     }
   }
   eventLog.flush();
+  // SPARK-11: a fleet-wide choice becomes the persisted fleet target, which
+  // the reconcile tick re-enforces on drift (stale marker / -rgc / mismatch).
+  if (all) {
+    const target = unlocking ? { mode: "unlocked", mhz: null } : { mode: "fixed", mhz };
+    updateSettings({ clockCapTarget: target });
+    clockCapAuto.setFleetTarget(target);
+  }
   res.json({ success: true, mhz: unlocking ? null : mhz, results });
 });
 
 /** Preset list for the UI — a single source of truth with server/clockCap.js. */
 app.get("/api/sparks/clock-cap/presets", (_req, res) => {
   res.json({ presets: CLOCK_CAP_PRESETS });
+});
+
+// ─── Auto clock cap mode (SPARK-6) ───────────────────────
+// Turn the temperature-driven cap controller on for a node or All Sparks. The
+// cap itself keeps using the narrow sudoers rule; Auto only decides when to
+// step it (server/clockCapAuto.js).
+app.post("/api/sparks/clock-cap/mode", async (req, res) => {
+  if (req.body?.mode !== "auto") {
+    return res.status(400).json({ error: "mode must be \"auto\"" });
+  }
+  const bodyIds = req.body?.sparkIds;
+  const all = bodyIds === "all" || !Array.isArray(bodyIds) || bodyIds.length === 0;
+  const targets = all
+    ? registry.sparks
+    : bodyIds.map((id) => registry.getSpark(String(id))).filter(Boolean);
+  if (targets.length === 0) {
+    return res.status(400).json({ error: "No matching Sparks" });
+  }
+  if (!allowDestructive(principalKey(req)) || !allowGlobalDestructive(clientKey(req))) {
+    return rejectLimited(res, "Too many clock-cap requests; try again shortly");
+  }
+  const results = [];
+  for (const spark of targets) {
+    const entry = { id: spark.id, name: spark.name };
+    try {
+      const started = await clockCapAuto.enable(spark);
+      results.push({ ...entry, ok: true, ...started });
+    } catch (err) {
+      const msg = err.message || String(err);
+      results.push({ ...entry, ok: false, error: msg });
+      recordEvent({
+        type: "gpu.clockcap.auto.failed",
+        severity: "error",
+        sparkId: spark.id,
+        sparkName: spark.name,
+        message: `Auto clock cap failed on ${spark.name || spark.id}: ${msg.split("\n")[0].slice(0, 120)}`,
+      });
+    }
+  }
+  eventLog.flush();
+  // SPARK-11: fleet-wide Auto is persisted as the fleet target too — reconcile
+  // stays off for it (Auto's own tick re-applies after a reboot).
+  if (all) {
+    updateSettings({ clockCapTarget: { mode: "auto", mhz: null } });
+    clockCapAuto.setFleetTarget({ mode: "auto", mhz: null });
+  }
+  res.json({ success: true, mode: "auto", results });
 });
 
 // ─── Prometheus exposition (opt-in) ──────────────────────
@@ -2436,6 +2506,10 @@ if (!startupPreflight.fatal) {
     startAllMonitors();
     fleetEnergyRuntime.start();
     llmTokenRuntime.start();
+    // Re-adopt Auto nodes from their gpu-clock-mode markers, then tick. The
+    // fleet-wide cap target persisted in settings (SPARK-11) drives reconcile.
+    clockCapAuto.setFleetTarget(getSettings().clockCapTarget);
+    clockCapAuto.start(registry);
   });
 } else {
   process.exitCode = 1;
@@ -2468,6 +2542,7 @@ async function shutdown(signal) {
   } catch (err) {
     console.error("[sparkDash] failed to stop launcher watchers:", err.message);
   }
+  clockCapAuto.stop();
   try {
     eventLog.flush();
   } catch (err) {

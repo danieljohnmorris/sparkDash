@@ -51,6 +51,16 @@ const DEFAULTS = Object.freeze({
    * Off by default: when off the path answers 404.
    */
   prometheusExport: false,
+  /**
+   * Fleet-wide GPU clock-cap target (SPARK-11), recorded whenever a cap is
+   * applied to All Sparks. null = no fleet target (per-node management only).
+   * A periodic reconcile (server/clockCapAuto.js) reapplies it to any node
+   * whose live status drifts (stale marker after reboot, -rgc, mismatch).
+   *   { mode: "auto", mhz: null }
+   *   { mode: "fixed", mhz: 2000 }
+   *   { mode: "unlocked", mhz: null }
+   */
+  clockCapTarget: null,
 });
 
 const POLL_INTERVAL_MIN_MS = 500;
@@ -105,6 +115,27 @@ function _clampSettings(settings) {
   // Ensure density is valid
   if (s.density !== "comfortable" && s.density !== "compact") {
     s.density = DEFAULTS.density;
+  }
+  // Fleet clock-cap target (SPARK-11): only the three known modes pass; a
+  // fixed target must be an integer in the preset band (1500–2400, 100 MHz
+  // steps), otherwise the setting falls back to "no fleet target".
+  const t = s.clockCapTarget;
+  if (t == null) {
+    s.clockCapTarget = null;
+  } else if (t.mode === "auto") {
+    s.clockCapTarget = { mode: "auto", mhz: null };
+  } else if (t.mode === "unlocked") {
+    s.clockCapTarget = { mode: "unlocked", mhz: null };
+  } else if (
+    t.mode === "fixed" &&
+    Number.isInteger(t.mhz) &&
+    t.mhz >= 1500 &&
+    t.mhz <= 2400 &&
+    t.mhz % 100 === 0
+  ) {
+    s.clockCapTarget = { mode: "fixed", mhz: t.mhz };
+  } else {
+    s.clockCapTarget = null;
   }
   return s;
 }

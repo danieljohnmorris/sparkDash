@@ -39,3 +39,23 @@ test("prometheusExport is opt-in and stored as a boolean", () => {
   assert.equal(loadSettings().prometheusExport, true);
   assert.equal(updateSettings({ prometheusExport: 0 }).prometheusExport, false);
 });
+
+test("clockCapTarget persists the fleet mode and rejects invalid shapes", () => {
+  fs.writeFileSync(process.env.SETTINGS_JSON_PATH, JSON.stringify({ density: "compact" }));
+  updateSettings({ clockCapTarget: { mode: "fixed", mhz: 2000 } });
+  assert.deepEqual(loadSettings().clockCapTarget, { mode: "fixed", mhz: 2000 });
+
+  updateSettings({ clockCapTarget: { mode: "unlocked", mhz: null } });
+  assert.deepEqual(loadSettings().clockCapTarget, { mode: "unlocked", mhz: null });
+
+  updateSettings({ clockCapTarget: { mode: "auto", mhz: null } });
+  assert.deepEqual(loadSettings().clockCapTarget, { mode: "auto", mhz: null });
+
+  // Invalid mode / off-preset MHz fall back to "no fleet target".
+  updateSettings({ clockCapTarget: { mode: "turbo", mhz: 2000 } });
+  assert.equal(loadSettings().clockCapTarget, null);
+  updateSettings({ clockCapTarget: { mode: "fixed", mhz: 2500 } });
+  assert.equal(loadSettings().clockCapTarget, null);
+  updateSettings({ clockCapTarget: "auto" });
+  assert.equal(loadSettings().clockCapTarget, null);
+});
