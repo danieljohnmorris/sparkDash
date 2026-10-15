@@ -483,6 +483,33 @@ test("disabling stops the loop and clears per-node state without touching caps",
   assert.equal(calls.length, 1); // no further actuation after disable
 });
 
+test("retargeting the held cap while Auto is on re-applies it to held nodes", async () => {
+  const temps = { a: 80, b: 30 };
+  const { controller, calls } = harness({ temps });
+  await controller.setEnabled(true, 2000);
+  await controller.tick();
+  assert.deepEqual(calls, [["apply", "a", 2000]]);
+
+  // Hot node is already held; picking another preset must move it now, not
+  // only after it cools below release and re-heats.
+  await controller.setEnabled(true, 2150);
+  assert.deepEqual(calls, [
+    ["apply", "a", 2000],
+    ["apply", "a", 2150],
+  ]);
+  assert.equal(controller.status().capMhz, 2150);
+  assert.equal(controller.status().sparks.find((s) => s.id === "a").holding, true);
+
+  // The cool node was untouched; the next tick applies the new cap when hot.
+  temps.b = 80;
+  await controller.tick();
+  assert.deepEqual(calls, [
+    ["apply", "a", 2000],
+    ["apply", "a", 2150],
+    ["apply", "b", 2150],
+  ]);
+});
+
 test("enabling adopts existing caps so auto releases what it holds", async () => {
   const sparks = [spark("a"), spark("b")];
   const calls = [];

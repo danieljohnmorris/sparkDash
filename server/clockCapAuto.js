@@ -458,14 +458,21 @@ export class FleetClockAuto {
 
   /**
    * Enable/disable fleet auto mode. When enabling with a capMhz, the value is
-   * validated first so an invalid cap never flips the mode on. Existing caps
-   * are adopted (best effort) so auto releases exactly what it holds.
+   * validated first so an invalid cap never flips the mode on. Enabling from
+   * off adopts existing caps (best effort) so auto releases exactly what it
+   * holds; enabling again with a new capMhz (retargeting while already on)
+   * re-applies that cap to every node auto is already holding.
    */
   async setEnabled(enabled, capMhz) {
     if (capMhz !== undefined) this._capMhz = parseFleetAutoCap(capMhz);
+    // Retargeting the held cap while Auto is already on: re-apply the new cap
+    // to the nodes auto currently holds. Re-reading markers alone would leave
+    // a hot node on the old cap, since the tick skips nodes already held.
+    const retarget = Boolean(enabled) && this._enabled && capMhz !== undefined;
     this._enabled = Boolean(enabled);
     if (this._enabled) {
-      await this._adoptExistingCaps();
+      if (retarget) await this._reapplyHeldCaps();
+      else await this._adoptExistingCaps();
       this._ensureTimer();
     } else {
       this._stopTimer();
@@ -518,6 +525,41 @@ export class FleetClockAuto {
       })
     );
     return results;
+  }
+
+  /**
+   * Push the current held cap to every node auto is already holding. Used when
+   * the cap is retargeted while Auto is on: drives held nodes from the old MHz
+   * to the new one immediately instead of waiting for them to cool and re-heat.
+   */
+  async _reapplyHeldCaps() {
+    await Promise.allSettled(
+      this._sparks().map(async (spark) => {
+        if (this._holding.get(spark.id) !== true) return;
+        const name = spark.name || spark.id;
+        try {
+          await this._apply(spark, this._capMhz);
+          this._lastError.delete(spark.id);
+          this._recordEvent({
+            type: "gpu.clockcap.auto.applied",
+            severity: "info",
+            sparkId: spark.id,
+            sparkName: spark.name,
+            message: `Auto: retargeted held cap on ${name} to ${this._capMhz} MHz`,
+          });
+        } catch (err) {
+          const msg = (err?.message || String(err)).split("\n")[0].slice(0, 160);
+          this._lastError.set(spark.id, msg);
+          this._recordEvent({
+            type: "gpu.clockcap.auto.failed",
+            severity: "error",
+            sparkId: spark.id,
+            sparkName: spark.name,
+            message: `Auto clock cap failed on ${name}: ${msg}`,
+          });
+        }
+      })
+    );
   }
 
   /** One sampling pass. Overlapping ticks (slow SSH) are skipped, not queued. */
