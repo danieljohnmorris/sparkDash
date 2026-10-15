@@ -435,6 +435,13 @@ export class FleetClockAuto {
     this._heldSince = new Map();
     /** Last per-spark tick error, surfaced in status until the next success. */
     this._lastError = new Map();
+    /**
+     * Spark ids whose held cap was retargeted but the re-apply failed. The cap
+     * is retried every tick until it lands: while a node is held, `_tickSpark`
+     * never re-enters the hold transition, so without this the node would sit
+     * on the old MHz indefinitely while status reports the new cap.
+     */
+    this._retarget = new Set();
   }
 
   /** Current controller state for the API/UI. */
@@ -479,6 +486,7 @@ export class FleetClockAuto {
       this._holding.clear();
       this._heldSince.clear();
       this._lastError.clear();
+      this._retarget.clear();
     }
     return this.status();
   }
@@ -539,6 +547,7 @@ export class FleetClockAuto {
         const name = spark.name || spark.id;
         try {
           await this._apply(spark, this._capMhz);
+          this._retarget.delete(spark.id);
           this._lastError.delete(spark.id);
           this._recordEvent({
             type: "gpu.clockcap.auto.applied",
@@ -549,6 +558,9 @@ export class FleetClockAuto {
           });
         } catch (err) {
           const msg = (err?.message || String(err)).split("\n")[0].slice(0, 160);
+          // Leave the node held (still capped at the old MHz) but mark it for
+          // a retry on every subsequent tick so the retarget eventually lands.
+          this._retarget.add(spark.id);
           this._lastError.set(spark.id, msg);
           this._recordEvent({
             type: "gpu.clockcap.auto.failed",
@@ -579,23 +591,33 @@ export class FleetClockAuto {
     const temp = this._readTemp(spark);
     if (!Number.isFinite(temp)) return; // offline or no fresh reading — hold state
     const name = spark.name || spark.id;
+    const holding = this._holding.get(spark.id) === true;
+    const release = holding && temp <= AUTO_RELEASE_TEMP_C;
+    // A held node whose retargeted cap is still pending is re-applied on every
+    // tick: the hold transition below never re-fires while the node is held.
+    const retrying = holding && this._retarget.has(spark.id);
+    const apply = !release && ((temp >= AUTO_HOLD_TEMP_C && !holding) || retrying);
     try {
-      if (temp >= AUTO_HOLD_TEMP_C && this._holding.get(spark.id) !== true) {
+      if (apply) {
         await this._apply(spark, this._capMhz);
+        if (!holding) this._heldSince.set(spark.id, this._now());
         this._holding.set(spark.id, true);
-        this._heldSince.set(spark.id, this._now());
+        this._retarget.delete(spark.id);
         this._lastError.delete(spark.id);
         this._recordEvent({
           type: "gpu.clockcap.auto.applied",
           severity: "info",
           sparkId: spark.id,
           sparkName: spark.name,
-          message: `Auto: capped ${name} at ${this._capMhz} MHz (GPU ${Math.round(temp)}°C ≥ ${AUTO_HOLD_TEMP_C}°C)`,
+          message: holding
+            ? `Auto: retargeted held cap on ${name} to ${this._capMhz} MHz`
+            : `Auto: capped ${name} at ${this._capMhz} MHz (GPU ${Math.round(temp)}°C ≥ ${AUTO_HOLD_TEMP_C}°C)`,
         });
-      } else if (temp <= AUTO_RELEASE_TEMP_C && this._holding.get(spark.id) === true) {
+      } else if (release) {
         await this._revert(spark);
         this._holding.set(spark.id, false);
         this._heldSince.delete(spark.id);
+        this._retarget.delete(spark.id);
         this._lastError.delete(spark.id);
         this._recordEvent({
           type: "gpu.clockcap.auto.released",

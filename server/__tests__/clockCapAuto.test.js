@@ -510,6 +510,49 @@ test("retargeting the held cap while Auto is on re-applies it to held nodes", as
   ]);
 });
 
+test("a failed retarget of a held cap is retried on the next tick until it lands", async () => {
+  const temps = { a: 80 };
+  const events = [];
+  const calls = [];
+  let failRetarget = true;
+  const controller = new FleetClockAuto({
+    sparks: () => [spark("a")],
+    readTemp: (s) => temps[s.id] ?? null,
+    readStatus: async () => ({ mhz: null }),
+    apply: async (s, mhz) => {
+      calls.push(["apply", s.id, mhz]);
+      if (mhz === 2150 && failRetarget) throw new Error("ssh: timeout");
+      return { mhz };
+    },
+    revert: async (s) => {
+      calls.push(["revert", s.id]);
+      return { mhz: null };
+    },
+    recordEvent: (e) => events.push(e),
+  });
+  await controller.setEnabled(true, 2000);
+  await controller.tick();
+  assert.deepEqual(calls, [["apply", "a", 2000]]);
+
+  // Retarget fails: the node stays held (still on the old cap) but the error
+  // is surfaced, not silently dropped.
+  await controller.setEnabled(true, 2150);
+  assert.deepEqual(calls, [["apply", "a", 2000], ["apply", "a", 2150]]);
+  assert.equal(controller.status().sparks.find((s) => s.id === "a").holding, true);
+  assert.equal(controller.status().sparks.find((s) => s.id === "a").lastError, "ssh: timeout");
+
+  // The next tick retries the retarget without waiting for a hold transition.
+  failRetarget = false;
+  await controller.tick();
+  assert.deepEqual(calls, [
+    ["apply", "a", 2000],
+    ["apply", "a", 2150],
+    ["apply", "a", 2150],
+  ]);
+  assert.equal(controller.status().sparks.find((s) => s.id === "a").lastError, null);
+  assert.equal(events.filter((e) => e.type === "gpu.clockcap.auto.failed").length, 1);
+});
+
 test("enabling adopts existing caps so auto releases what it holds", async () => {
   const sparks = [spark("a"), spark("b")];
   const calls = [];

@@ -239,6 +239,14 @@ export function FleetClockCap({ sparks }: FleetClockCapProps) {
                 ? `When any GPU reaches ${auto.holdTempC} °C, all Sparks are capped at ${auto.capMhz} MHz. When all are at or below ${auto.releaseTempC} °C, the cap is released.`
                 : "Off: the preset you pick is applied now and stays."}
             </p>
+            {autoError ? (
+              <div className="danger-box" role="alert">
+                <b>Auto mode failed</b>
+                <ul>
+                  <li>{autoError}</li>
+                </ul>
+              </div>
+            ) : null}
           </div>
         ) : (
           <p className="text-xs text-muted">
@@ -278,6 +286,11 @@ export function FleetClockCap({ sparks }: FleetClockCapProps) {
                 <span className="ov-cap__name">{spark.name || spark.id}</span>
                 <span className="mono text-xs">{temp != null ? `${Math.round(temp)} °C` : "—"}</span>
                 {autoState?.holding ? <Tag tone="warn">auto hold</Tag> : null}
+                {autoState?.lastError ? (
+                  <Tag tone="bad" title={autoState.lastError}>
+                    auto error
+                  </Tag>
+                ) : null}
                 {status ? (
                   status.ok ? (
                     <Tag tone={status.mhz != null ? "acc" : "neutral"}>

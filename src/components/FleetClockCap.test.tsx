@@ -254,6 +254,37 @@ describe("FleetClockCap", () => {
     expect(alert?.textContent).toContain("ssh: connection refused");
   });
 
+  it("surfaces a per-node Auto controller error from the fleet status", async () => {
+    vi.mocked(fetchFleetClockAuto).mockResolvedValue(
+      autoState({
+        enabled: true,
+        sparks: [{ id: "a", name: "A", holding: true, since: Date.now(), lastError: "ssh: timeout" }],
+      })
+    );
+    const { container } = render(<FleetClockCap sparks={[spark("a", 74)]} />);
+    await flush();
+
+    const rows = [...container.querySelectorAll(".ov-cap__spark")];
+    expect(rows[0].textContent).toContain("auto error");
+    const errorTag = [...rows[0].querySelectorAll(".tag")].find((t) => t.textContent === "auto error");
+    expect(errorTag?.getAttribute("title")).toBe("ssh: timeout");
+  });
+
+  it("shows an error when a retarget/toggle fails while Auto state is already loaded", async () => {
+    vi.mocked(fetchFleetClockAuto).mockResolvedValue(autoState({ enabled: true, capMhz: 2000 }));
+    vi.mocked(setFleetClockAuto).mockRejectedValue(new Error("bad gateway"));
+    const { container } = render(<FleetClockCap sparks={[spark("a", 60)]} />);
+    await flush();
+
+    await act(async () => {
+      presetButton(container, "2150").click();
+    });
+    await flush();
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("bad gateway");
+  });
+
   // ─── SPARK-11/SPARK-12: on-load preselect from the backend reads ───
 
   it("highlights the preset matching the fleet's uniform cap on load", async () => {
