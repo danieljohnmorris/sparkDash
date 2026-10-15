@@ -614,7 +614,7 @@ export function setClockCap(
 
 /**
  * Turn the Auto clock cap (1800–2200 MHz, temperature-driven) on for the
- * given targets. Any preset / Unlocked choice turns it back off.
+ * given targets. Any preset / Uncapped choice turns it back off.
  */
 export function setClockCapMode(
   sparkIds: string[] | "all",

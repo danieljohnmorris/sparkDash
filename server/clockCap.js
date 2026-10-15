@@ -34,9 +34,9 @@ export const MARKER_REL_PATH = ".config/sparkdash/gpu-clock-cap";
  */
 export const AUTO_MODE_REL_PATH = ".config/sparkdash/gpu-clock-mode";
 
-/** Preset caps in MHz (every 100 MHz 1500–2400; stock boost is ~2400). */
+/** Preset caps in MHz (every 50 MHz 1800–2400; stock boost is ~2400). */
 export const CLOCK_CAP_PRESETS = Object.freeze([
-  1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400,
+  1800, 1850, 1900, 1950, 2000, 2050, 2100, 2150, 2200, 2250, 2300, 2350, 2400,
 ]);
 
 /** Auto mode never leaves this band (SPARK-6): the sweep's knee is 2200. */

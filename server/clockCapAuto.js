@@ -374,7 +374,7 @@ export class ClockCapAutoController {
  * Coexists with ClockCapAutoController (SPARK-6 per-node Auto).
  * Caps for the fleet controller are validated by parseFleetAutoCap.
  */
-export const AUTO_RANGE = Object.freeze({ min: 1800, max: 2200 });
+export const AUTO_RANGE = Object.freeze({ min: 1800, max: 2400 });
 
 /** Presets the auto cap may be set to (the clock-cap presets inside the range). */
 export const AUTO_CAP_PRESETS = Object.freeze(
@@ -415,22 +415,33 @@ export class FleetClockAuto {
    * @param {(spark: { id: string }, mhz: number) => Promise<unknown>} deps.apply Same signature as clockCap.applyClockCap.
    * @param {(spark: { id: string }) => Promise<unknown>} deps.revert Same signature as clockCap.revertClockCap.
    * @param {(event: object) => unknown} deps.recordEvent
+   * @param {() => number} [deps.now] Clock used to stamp "holding since"; injectable for tests.
    */
-  constructor({ sparks, readTemp, readStatus, apply, revert, recordEvent }) {
+  constructor({ sparks, readTemp, readStatus, apply, revert, recordEvent, now = Date.now }) {
     this._sparks = sparks;
     this._readTemp = readTemp;
     this._readStatus = readStatus;
     this._apply = apply;
     this._revert = revert;
     this._recordEvent = recordEvent;
+    this._now = now;
     this._timer = null;
     this._ticking = false;
     this._enabled = false;
     this._capMhz = DEFAULT_AUTO_CAP_MHZ;
     /** Per-spark auto ownership: true while auto is holding a cap on that node. */
     this._holding = new Map();
+    /** Epoch ms a node entered the hold, shown as "Holding since"; only while holding. */
+    this._heldSince = new Map();
     /** Last per-spark tick error, surfaced in status until the next success. */
     this._lastError = new Map();
+    /**
+     * Spark ids whose held cap was retargeted but the re-apply failed. The cap
+     * is retried every tick until it lands: while a node is held, `_tickSpark`
+     * never re-enters the hold transition, so without this the node would sit
+     * on the old MHz indefinitely while status reports the new cap.
+     */
+    this._retarget = new Set();
   }
 
   /** Current controller state for the API/UI. */
@@ -446,6 +457,7 @@ export class FleetClockAuto {
         id: spark.id,
         name: spark.name,
         holding: this._holding.get(spark.id) === true,
+        since: this._holding.get(spark.id) === true ? this._heldSince.get(spark.id) ?? null : null,
         lastError: this._lastError.get(spark.id) ?? null,
       })),
     };
@@ -453,19 +465,28 @@ export class FleetClockAuto {
 
   /**
    * Enable/disable fleet auto mode. When enabling with a capMhz, the value is
-   * validated first so an invalid cap never flips the mode on. Existing caps
-   * are adopted (best effort) so auto releases exactly what it holds.
+   * validated first so an invalid cap never flips the mode on. Enabling from
+   * off adopts existing caps (best effort) so auto releases exactly what it
+   * holds; enabling again with a new capMhz (retargeting while already on)
+   * re-applies that cap to every node auto is already holding.
    */
   async setEnabled(enabled, capMhz) {
     if (capMhz !== undefined) this._capMhz = parseFleetAutoCap(capMhz);
+    // Retargeting the held cap while Auto is already on: re-apply the new cap
+    // to the nodes auto currently holds. Re-reading markers alone would leave
+    // a hot node on the old cap, since the tick skips nodes already held.
+    const retarget = Boolean(enabled) && this._enabled && capMhz !== undefined;
     this._enabled = Boolean(enabled);
     if (this._enabled) {
-      await this._adoptExistingCaps();
+      if (retarget) await this._reapplyHeldCaps();
+      else await this._adoptExistingCaps();
       this._ensureTimer();
     } else {
       this._stopTimer();
       this._holding.clear();
+      this._heldSince.clear();
       this._lastError.clear();
+      this._retarget.clear();
     }
     return this.status();
   }
@@ -498,16 +519,59 @@ export class FleetClockAuto {
       this._sparks().map(async (spark) => {
         try {
           const status = await this._readStatus(spark);
-          this._holding.set(spark.id, status.mhz != null);
+          const holding = status.mhz != null;
+          this._holding.set(spark.id, holding);
+          if (holding) this._heldSince.set(spark.id, this._now());
+          else this._heldSince.delete(spark.id);
           this._lastError.delete(spark.id);
         } catch {
           // Unreachable node at enable time: start unowned; the tick will
           // apply a cap if the node comes back hot.
           this._holding.set(spark.id, false);
+          this._heldSince.delete(spark.id);
         }
       })
     );
     return results;
+  }
+
+  /**
+   * Push the current held cap to every node auto is already holding. Used when
+   * the cap is retargeted while Auto is on: drives held nodes from the old MHz
+   * to the new one immediately instead of waiting for them to cool and re-heat.
+   */
+  async _reapplyHeldCaps() {
+    await Promise.allSettled(
+      this._sparks().map(async (spark) => {
+        if (this._holding.get(spark.id) !== true) return;
+        const name = spark.name || spark.id;
+        try {
+          await this._apply(spark, this._capMhz);
+          this._retarget.delete(spark.id);
+          this._lastError.delete(spark.id);
+          this._recordEvent({
+            type: "gpu.clockcap.auto.applied",
+            severity: "info",
+            sparkId: spark.id,
+            sparkName: spark.name,
+            message: `Auto: retargeted held cap on ${name} to ${this._capMhz} MHz`,
+          });
+        } catch (err) {
+          const msg = (err?.message || String(err)).split("\n")[0].slice(0, 160);
+          // Leave the node held (still capped at the old MHz) but mark it for
+          // a retry on every subsequent tick so the retarget eventually lands.
+          this._retarget.add(spark.id);
+          this._lastError.set(spark.id, msg);
+          this._recordEvent({
+            type: "gpu.clockcap.auto.failed",
+            severity: "error",
+            sparkId: spark.id,
+            sparkName: spark.name,
+            message: `Auto clock cap failed on ${name}: ${msg}`,
+          });
+        }
+      })
+    );
   }
 
   /** One sampling pass. Overlapping ticks (slow SSH) are skipped, not queued. */
@@ -527,21 +591,33 @@ export class FleetClockAuto {
     const temp = this._readTemp(spark);
     if (!Number.isFinite(temp)) return; // offline or no fresh reading — hold state
     const name = spark.name || spark.id;
+    const holding = this._holding.get(spark.id) === true;
+    const release = holding && temp <= AUTO_RELEASE_TEMP_C;
+    // A held node whose retargeted cap is still pending is re-applied on every
+    // tick: the hold transition below never re-fires while the node is held.
+    const retrying = holding && this._retarget.has(spark.id);
+    const apply = !release && ((temp >= AUTO_HOLD_TEMP_C && !holding) || retrying);
     try {
-      if (temp >= AUTO_HOLD_TEMP_C && this._holding.get(spark.id) !== true) {
+      if (apply) {
         await this._apply(spark, this._capMhz);
+        if (!holding) this._heldSince.set(spark.id, this._now());
         this._holding.set(spark.id, true);
+        this._retarget.delete(spark.id);
         this._lastError.delete(spark.id);
         this._recordEvent({
           type: "gpu.clockcap.auto.applied",
           severity: "info",
           sparkId: spark.id,
           sparkName: spark.name,
-          message: `Auto: capped ${name} at ${this._capMhz} MHz (GPU ${Math.round(temp)}°C ≥ ${AUTO_HOLD_TEMP_C}°C)`,
+          message: holding
+            ? `Auto: retargeted held cap on ${name} to ${this._capMhz} MHz`
+            : `Auto: capped ${name} at ${this._capMhz} MHz (GPU ${Math.round(temp)}°C ≥ ${AUTO_HOLD_TEMP_C}°C)`,
         });
-      } else if (temp <= AUTO_RELEASE_TEMP_C && this._holding.get(spark.id) === true) {
+      } else if (release) {
         await this._revert(spark);
         this._holding.set(spark.id, false);
+        this._heldSince.delete(spark.id);
+        this._retarget.delete(spark.id);
         this._lastError.delete(spark.id);
         this._recordEvent({
           type: "gpu.clockcap.auto.released",

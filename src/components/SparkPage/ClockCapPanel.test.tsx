@@ -56,7 +56,7 @@ describe("ClockCapPanel", () => {
     expect(text).toContain("1990 MHz");
   });
 
-  it("shows Unlocked with no cap and a stale marker from an earlier boot", async () => {
+  it("shows Uncapped with no cap and a stale marker from an earlier boot", async () => {
     vi.mocked(fetchClockCap).mockResolvedValue({
       success: true,
       sparks: [okStatus({ mhz: null, stale: true, markerMhz: 1800, graphicsClockMHz: 2412 })],
@@ -64,7 +64,7 @@ describe("ClockCapPanel", () => {
     const { container } = render(<ClockCapPanel sparkId="s1" sparkName="spark1" />);
     await flush();
     const text = container.textContent ?? "";
-    expect(text).toContain("Unlocked");
+    expect(text).toContain("Uncapped");
     expect(text).toContain("stale");
     expect(text).toContain("2412 MHz");
   });
@@ -112,11 +112,11 @@ describe("ClockCapPanel", () => {
     await flush();
 
     act(() => [...container.querySelectorAll<HTMLButtonElement>(".seg > button")].find((b) => b.textContent === "All Sparks")!.click());
-    act(() => presetButton(container, "Unlocked").click());
-    await act(async () => dialogButton("Unlocked — confirm").click());
+    act(() => presetButton(container, "Uncapped").click());
+    await act(async () => dialogButton("Uncapped — confirm").click());
     await flush();
     expect(vi.mocked(setClockCap)).toHaveBeenCalledWith("all", null);
-    expect(container.textContent).toContain("Unlocked");
+    expect(container.textContent).toContain("Uncapped");
   });
 
   it("reports a per-node failure instead of failing silently", async () => {

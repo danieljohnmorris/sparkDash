@@ -1482,7 +1482,7 @@ export interface ClockCapSparkStatus {
   id: string;
   name: string;
   ok: boolean;
-  /** Effective cap in MHz, or null for stock / Unlocked. */
+  /** Effective cap in MHz, or null for stock / Uncapped. */
   mhz: number | null;
   /** True when a marker from an earlier boot exists (reboot cleared the cap). */
   stale: boolean;
@@ -1560,6 +1560,8 @@ export interface FleetClockAutoSparkState {
   name: string;
   /** True while auto is holding a cap on this node. */
   holding: boolean;
+  /** Epoch ms the node entered the hold (null unless `holding`). */
+  since: number | null;
   /** Last tick error for this node, or null. */
   lastError: string | null;
 }

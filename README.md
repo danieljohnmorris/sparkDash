@@ -395,7 +395,7 @@ A node in Auto keeps a `~/.config/sparkdash/gpu-clock-mode` file containing
 `auto`, next to the cap marker — that is how a restarted backend re-adopts the
 node and how the UI shows the Auto badge. Auto starts from the current cap
 when it is in band, else applies 2000 MHz. After a Spark reboot the cap is
-gone (stale boot_id) and Auto re-applies it. Choosing any preset or Unlocked
+gone (stale boot_id) and Auto re-applies it. Choosing any preset or Uncapped
 turns Auto off for that node. The cap is applied with the same
 `sudo nvidia-smi -lgc` rule and marker as the manual presets; every applied
 step is verified against the marker before the UI reports it, failures are
