@@ -340,7 +340,7 @@ function spark(id, name = id) {
 }
 
 /** Two-node fleet with mutable temps; applies/reverts are recorded, not executed. */
-function harness({ temps = {}, sparks = [spark("a"), spark("b")], applyError = null } = {}) {
+function harness({ temps = {}, sparks = [spark("a"), spark("b")], applyError = null, now = Date.now } = {}) {
   const events = [];
   const calls = [];
   const controller = new FleetClockAuto({
@@ -358,16 +358,20 @@ function harness({ temps = {}, sparks = [spark("a"), spark("b")], applyError = n
       return { mhz: null };
     },
     recordEvent: (event) => events.push(event),
+    now,
   });
   return { controller, events, calls };
 }
 
-test("parseFleetAutoCap accepts exactly the presets inside the auto range and nothing else", () => {
-  assert.deepEqual(AUTO_CAP_PRESETS, [1800, 1900, 2000, 2100, 2200]);
-  assert.deepEqual(AUTO_RANGE, { min: 1800, max: 2200 });
+test("parseFleetAutoCap accepts exactly the clock-cap presets and nothing else", () => {
+  assert.deepEqual(
+    AUTO_CAP_PRESETS,
+    [1800, 1850, 1900, 1950, 2000, 2050, 2100, 2150, 2200, 2250, 2300, 2350, 2400]
+  );
+  assert.deepEqual(AUTO_RANGE, { min: 1800, max: 2400 });
   assert.equal(parseFleetAutoCap(1800), 1800);
-  assert.equal(parseFleetAutoCap("2200"), 2200);
-  for (const bad of [1700, 2300, 2000.5, "abc"]) {
+  assert.equal(parseFleetAutoCap("2400"), 2400);
+  for (const bad of [1750, 1825, 2450, 2000.5, "abc"]) {
     assert.throws(() => parseFleetAutoCap(bad));
   }
 });
@@ -400,18 +404,36 @@ test("holds the cap at the hold temperature and releases at the release temperat
   ]);
 });
 
-test("uses the configured auto cap and validates it against the range", async () => {
+test("uses the configured auto cap and validates it against the preset list", async () => {
   const temps = { a: 80 };
   const { controller, calls } = harness({ temps });
-  await controller.setEnabled(true, 2200);
+  await controller.setEnabled(true, 2400);
   await controller.tick();
-  assert.deepEqual(calls, [["apply", "a", 2200]]);
+  assert.deepEqual(calls, [["apply", "a", 2400]]);
 
-  await assert.rejects(() => controller.setEnabled(true, 2400), /Auto cap must be between/);
+  await assert.rejects(() => controller.setEnabled(true, 2450), /Invalid clock cap/);
   // The invalid request must not have changed the running cap.
   temps.a = 30;
   await controller.tick();
-  assert.deepEqual(calls, [["apply", "a", 2200], ["revert", "a"]]);
+  assert.deepEqual(calls, [["apply", "a", 2400], ["revert", "a"]]);
+});
+
+test("reports when the fleet entered the hold, and clears it on release", async () => {
+  const temps = { a: 80, b: 30 };
+  let clock = 1_000_000;
+  const { controller } = harness({ temps, now: () => clock });
+  await controller.setEnabled(true, 2000);
+
+  await controller.tick();
+  const held = controller.status().sparks.find((s) => s.id === "a");
+  assert.equal(held.holding, true);
+  assert.equal(held.since, clock, "the hold start is stamped when the cap is applied");
+  assert.equal(controller.status().sparks.find((s) => s.id === "b").since, null);
+
+  temps.a = 60; // at or below release: revert clears the stamp
+  clock += 60_000;
+  await controller.tick();
+  assert.equal(controller.status().sparks.find((s) => s.id === "a").since, null);
 });
 
 test("nodes without a fresh reading are skipped, not reverted", async () => {
@@ -491,7 +513,11 @@ test("status exposes thresholds, range, and per-node holding state", async () =>
   assert.equal(status.capMhz, 2100);
   assert.equal(status.holdTempC, 72);
   assert.equal(status.releaseTempC, 67);
-  assert.deepEqual(status.presets, [1800, 1900, 2000, 2100, 2200]);
+  assert.deepEqual(status.range, { min: 1800, max: 2400 });
+  assert.deepEqual(
+    status.presets,
+    [1800, 1850, 1900, 1950, 2000, 2050, 2100, 2150, 2200, 2250, 2300, 2350, 2400]
+  );
   assert.deepEqual(
     status.sparks.map((s) => [s.id, s.holding]),
     [["a", true], ["b", false]]

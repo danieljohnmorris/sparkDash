@@ -8,8 +8,10 @@ import { Panel } from "../ui/Panel";
 import { Tag } from "../ui/Tag";
 import { GaugeIcon, RotateIcon, ThermometerIcon, XIcon } from "../ui/icons";
 
-/** Preset caps in MHz. The server rejects anything outside this exact list. */
-const PRESETS = [1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400];
+/** Preset caps in MHz (1800–2400 every 50 MHz). The server rejects anything outside this exact list. */
+const PRESETS = [
+  1800, 1850, 1900, 1950, 2000, 2050, 2100, 2150, 2200, 2250, 2300, 2350, 2400,
+];
 
 /** Auto mode steps within this band only (SPARK-6). */
 const AUTO_BAND = [1800, 2200] as const;
@@ -61,7 +63,7 @@ function CapStatusLine({ status }: { status: ClockCapSparkStatus | undefined }) 
     <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
       <span className="text-muted">Cap</span>
       <Tag tone={status.mhz != null ? "acc" : "neutral"}>
-        {status.mhz != null ? `${status.mhz} MHz` : "Unlocked"}
+        {status.mhz != null ? `${status.mhz} MHz` : "Uncapped"}
       </Tag>
       {status.auto?.enabled ? (
         <Tag tone="good" title={`Auto: steps 100 MHz between ${AUTO_BAND[0]} and ${AUTO_BAND[1]} MHz by GPU temperature (step down at 72 °C, back up at 67 °C)`}>
@@ -137,7 +139,7 @@ export function ClockCapPanel({ sparkId, sparkName, fleet = [] }: ClockCapPanelP
       : { ids: [sparkId], label: nameOf(sparkId) || sparkName };
 
   const confirmLabel =
-    pendingMhz === null ? "Unlocked — confirm" : `Set ${pendingMhz} MHz`;
+    pendingMhz === null ? "Uncapped — confirm" : `Set ${pendingMhz} MHz`;
 
   const handleApply = async () => {
     if (pendingMhz === undefined) return;
@@ -272,7 +274,7 @@ export function ClockCapPanel({ sparkId, sparkName, fleet = [] }: ClockCapPanelP
           : `Apply a ${mhz} MHz clock cap on the selected target`
       }
     >
-      {mhz === null ? "Unlocked" : mhz}
+      {mhz === null ? "Uncapped" : mhz}
     </button>
   );
 
@@ -280,7 +282,7 @@ export function ClockCapPanel({ sparkId, sparkName, fleet = [] }: ClockCapPanelP
     <Panel
       title="GPU clock cap"
       icon={<GaugeIcon className="h-3.5 w-3.5 text-muted" />}
-      hint="Caps the GPU graphics clock via nvidia-smi -lgc; Unlocked reverts to stock (-rgc). A reboot clears the cap."
+      hint="Caps the GPU graphics clock via nvidia-smi -lgc; Uncapped reverts to stock (-rgc). A reboot clears the cap."
       actions={
         <button
           type="button"
@@ -421,7 +423,7 @@ export function ClockCapPanel({ sparkId, sparkName, fleet = [] }: ClockCapPanelP
                     </h2>
                     <p className="modal-sheet__sub">
                       {pendingMhz === null
-                        ? "Unlocked — revert to stock clocks"
+                        ? "Uncapped — revert to stock clocks"
                         : `${pendingMhz} MHz graphics clock cap`}
                     </p>
                   </div>
@@ -524,7 +526,7 @@ export function ClockCapPanel({ sparkId, sparkName, fleet = [] }: ClockCapPanelP
                     Steps down 100 MHz at ≥ 72 °C (immediately from 77 °C while the temperature
                     is still rising) and back up 100 MHz at ≤ 67 °C, never leaving{" "}
                     {AUTO_BAND[0]}–{AUTO_BAND[1]} MHz. Starts from the current cap when it is in
-                    band, else 2000 MHz. Any preset or Unlocked choice turns Auto off.
+                    band, else 2000 MHz. Any preset or Uncapped choice turns Auto off.
                   </p>
                 </div>
 

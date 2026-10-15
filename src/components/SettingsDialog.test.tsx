@@ -61,8 +61,8 @@ function autoState(overrides = {}) {
     capMhz: 1800,
     holdTempC: 72,
     releaseTempC: 67,
-    range: { min: 1800, max: 2200 },
-    presets: [1800, 1900, 2000, 2100, 2200],
+    range: { min: 1800, max: 2400 },
+    presets: [1800, 1850, 1900, 1950, 2000, 2050, 2100, 2150, 2200, 2250, 2300, 2350, 2400],
     sparks: [],
     ...overrides,
   };
@@ -100,21 +100,39 @@ beforeEach(() => {
 });
 
 describe("SettingsDialog fleet clock control", () => {
-  it("hosts the fleet-wide clock cap panel with presets, Unlocked and Auto", async () => {
+  it("hosts the fleet-wide clock cap panel with 50 MHz presets, Uncapped and the Auto thermal hold switch", async () => {
     const { container } = render(<SettingsDialog open onClose={() => {}} onSaved={() => {}} sparks={[spark("s1"), spark("s2")]} />);
     await flush();
 
-    // The moved panel is present, with the full preset range and Unlocked.
+    // The moved panel is present, with the 1800–2400 every-50-MHz range and Uncapped.
     expect(container.textContent).toContain("GPU clock cap");
     const presetGroup = container.querySelector('[aria-label="Fleet clock cap preset"]')!;
-    for (const mhz of [1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400]) {
+    for (const mhz of [1800, 1850, 1900, 1950, 2000, 2050, 2100, 2150, 2200, 2250, 2300, 2350, 2400]) {
       expect(presetGroup.textContent).toContain(String(mhz));
     }
-    expect(presetGroup.textContent).toContain("Unlocked");
-    // Auto mode: default 1800–2200 hold band, ≥72 °C / ≤67 °C.
-    expect(container.textContent).toContain("Auto off");
-    expect(container.textContent).toContain("≥72 °C");
-    expect(container.textContent).toContain("≤67 °C");
+    expect(presetGroup.textContent).toContain("Uncapped");
+    // Auto thermal hold is a real on/off switch with the off-state help text.
+    const toggle = dialog().querySelector('[role="switch"][aria-label="Auto thermal hold"]');
+    expect(toggle).not.toBeNull();
+    expect(toggle!.getAttribute("aria-checked")).toBe("false");
+    expect(container.textContent).toContain("Off: the preset you pick is applied now and stays.");
+  });
+
+  it("shows the on-state help text and live hold state when Auto thermal hold is on", async () => {
+    vi.mocked(fetchFleetClockAuto).mockResolvedValue(
+      autoState({
+        enabled: true,
+        capMhz: 2100,
+        sparks: [{ id: "s1", name: "s1", holding: true, since: Date.now(), lastError: null }],
+      })
+    );
+    const { container } = render(<SettingsDialog open onClose={() => {}} onSaved={() => {}} sparks={[spark("s1")]} />);
+    await flush();
+
+    expect(container.textContent).toContain(
+      "When any GPU reaches 72 °C, all Sparks are capped at 2100 MHz. When all are at or below 67 °C, the cap is released."
+    );
+    expect(container.querySelector('[data-testid="auto-hold-state"]')?.textContent).toContain("Holding since");
   });
 
   it("applies a preset fleet-wide from Settings after confirm", async () => {
@@ -136,7 +154,7 @@ describe("SettingsDialog fleet clock control", () => {
     expect(setClockCapMock).toHaveBeenCalledWith("all", 1800);
   });
 
-  it("unlocks every Spark from Settings", async () => {
+  it("uncaps every Spark from Settings", async () => {
     setClockCapMock.mockResolvedValue({
       success: true,
       mhz: null,
@@ -145,23 +163,30 @@ describe("SettingsDialog fleet clock control", () => {
     render(<SettingsDialog open onClose={() => {}} onSaved={() => {}} sparks={[spark("s1")]} />);
     await flush();
 
-    act(() => button("Unlocked").click());
+    act(() => button("Uncapped").click());
     await flush();
-    await act(async () => button("Unlocked — confirm", confirmSheet()).click());
+    await act(async () => button("Uncapped — confirm", confirmSheet()).click());
     await flush();
 
     expect(setClockCapMock).toHaveBeenCalledWith("all", null);
   });
 
-  it("toggles fleet-wide auto mode from Settings", async () => {
+  it("toggles fleet-wide Auto thermal hold from Settings", async () => {
     setAutoMock.mockResolvedValue(autoState({ enabled: true }));
-    render(<SettingsDialog open onClose={() => {}} onSaved={() => {}} sparks={[spark("s1")]} />);
+    const { container } = render(<SettingsDialog open onClose={() => {}} onSaved={() => {}} sparks={[spark("s1")]} />);
     await flush();
 
-    await act(async () => button("Auto off").click());
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Auto thermal hold"]'
+    )!;
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+
+    await act(async () => toggle.click());
     await flush();
 
     expect(setAutoMock).toHaveBeenCalledWith(true, undefined);
-    expect(dialog().textContent).toContain("Auto on");
+    expect(container.querySelector('[role="switch"][aria-label="Auto thermal hold"]')!.getAttribute("aria-checked")).toBe(
+      "true"
+    );
   });
 });

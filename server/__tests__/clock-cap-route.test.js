@@ -105,7 +105,24 @@ test("GET /api/sparks/clock-cap/presets mirrors the preset list", async (t) => {
   const res = await fetch(`${base}/api/sparks/clock-cap/presets`);
   assert.equal(res.status, 200);
   const body = await res.json();
-  assert.deepEqual(body.presets, [1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400]);
+  assert.deepEqual(
+    body.presets,
+    [1800, 1850, 1900, 1950, 2000, 2050, 2100, 2150, 2200, 2250, 2300, 2350, 2400]
+  );
+});
+
+test("POST /api/sparks/clock-cap accepts a 50 MHz-step preset (fails only on the empty fleet)", async (t) => {
+  const base = await startServer(t);
+  const res = await fetch(`${base}/api/sparks/clock-cap`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sparkIds: "all", mhz: 1850 }),
+  });
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  // Validation passed: the only reason it fails here is the empty fleet.
+  assert.doesNotMatch(body.error, /Invalid clock cap/);
+  assert.match(body.error, /No matching Sparks/);
 });
 
 test("POST /api/sparks/clock-cap/mode rejects anything but auto and an empty fleet", async (t) => {

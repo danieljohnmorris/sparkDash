@@ -28,8 +28,11 @@ import {
 const FRESH_BOOT = "3626a1f4-0f2e-4b7a-9d6a-1f0e3a2b4c5d";
 const OLD_BOOT = "00000000-1111-2222-3333-444444444444";
 
-test("presets are 1500..2400 every 100 MHz", () => {
-  assert.deepEqual([...CLOCK_CAP_PRESETS], [1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400]);
+test("presets are 1800..2400 every 50 MHz", () => {
+  assert.deepEqual(
+    [...CLOCK_CAP_PRESETS],
+    [1800, 1850, 1900, 1950, 2000, 2050, 2100, 2150, 2200, 2250, 2300, 2350, 2400]
+  );
 });
 
 test("parseClockCap accepts exactly the preset integers", () => {
@@ -40,7 +43,7 @@ test("parseClockCap accepts exactly the preset integers", () => {
 });
 
 test("parseClockCap rejects out-of-list and non-integer values", () => {
-  for (const bad of [0, 1, 1499, 2450, 2500, 1800.5, "1800.5", "abc", "", null, undefined, true, [], {}, NaN]) {
+  for (const bad of [0, 1, 1499, 1775, 1825, 2425, 2450, 2500, 1800.5, "1800.5", "abc", "", null, undefined, true, [], {}, NaN]) {
     assert.throws(() => parseClockCap(bad), /Invalid clock cap/);
   }
 });

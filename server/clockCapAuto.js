@@ -374,7 +374,7 @@ export class ClockCapAutoController {
  * Coexists with ClockCapAutoController (SPARK-6 per-node Auto).
  * Caps for the fleet controller are validated by parseFleetAutoCap.
  */
-export const AUTO_RANGE = Object.freeze({ min: 1800, max: 2200 });
+export const AUTO_RANGE = Object.freeze({ min: 1800, max: 2400 });
 
 /** Presets the auto cap may be set to (the clock-cap presets inside the range). */
 export const AUTO_CAP_PRESETS = Object.freeze(
@@ -415,20 +415,24 @@ export class FleetClockAuto {
    * @param {(spark: { id: string }, mhz: number) => Promise<unknown>} deps.apply Same signature as clockCap.applyClockCap.
    * @param {(spark: { id: string }) => Promise<unknown>} deps.revert Same signature as clockCap.revertClockCap.
    * @param {(event: object) => unknown} deps.recordEvent
+   * @param {() => number} [deps.now] Clock used to stamp "holding since"; injectable for tests.
    */
-  constructor({ sparks, readTemp, readStatus, apply, revert, recordEvent }) {
+  constructor({ sparks, readTemp, readStatus, apply, revert, recordEvent, now = Date.now }) {
     this._sparks = sparks;
     this._readTemp = readTemp;
     this._readStatus = readStatus;
     this._apply = apply;
     this._revert = revert;
     this._recordEvent = recordEvent;
+    this._now = now;
     this._timer = null;
     this._ticking = false;
     this._enabled = false;
     this._capMhz = DEFAULT_AUTO_CAP_MHZ;
     /** Per-spark auto ownership: true while auto is holding a cap on that node. */
     this._holding = new Map();
+    /** Epoch ms a node entered the hold, shown as "Holding since"; only while holding. */
+    this._heldSince = new Map();
     /** Last per-spark tick error, surfaced in status until the next success. */
     this._lastError = new Map();
   }
@@ -446,6 +450,7 @@ export class FleetClockAuto {
         id: spark.id,
         name: spark.name,
         holding: this._holding.get(spark.id) === true,
+        since: this._holding.get(spark.id) === true ? this._heldSince.get(spark.id) ?? null : null,
         lastError: this._lastError.get(spark.id) ?? null,
       })),
     };
@@ -465,6 +470,7 @@ export class FleetClockAuto {
     } else {
       this._stopTimer();
       this._holding.clear();
+      this._heldSince.clear();
       this._lastError.clear();
     }
     return this.status();
@@ -498,12 +504,16 @@ export class FleetClockAuto {
       this._sparks().map(async (spark) => {
         try {
           const status = await this._readStatus(spark);
-          this._holding.set(spark.id, status.mhz != null);
+          const holding = status.mhz != null;
+          this._holding.set(spark.id, holding);
+          if (holding) this._heldSince.set(spark.id, this._now());
+          else this._heldSince.delete(spark.id);
           this._lastError.delete(spark.id);
         } catch {
           // Unreachable node at enable time: start unowned; the tick will
           // apply a cap if the node comes back hot.
           this._holding.set(spark.id, false);
+          this._heldSince.delete(spark.id);
         }
       })
     );
@@ -531,6 +541,7 @@ export class FleetClockAuto {
       if (temp >= AUTO_HOLD_TEMP_C && this._holding.get(spark.id) !== true) {
         await this._apply(spark, this._capMhz);
         this._holding.set(spark.id, true);
+        this._heldSince.set(spark.id, this._now());
         this._lastError.delete(spark.id);
         this._recordEvent({
           type: "gpu.clockcap.auto.applied",
@@ -542,6 +553,7 @@ export class FleetClockAuto {
       } else if (temp <= AUTO_RELEASE_TEMP_C && this._holding.get(spark.id) === true) {
         await this._revert(spark);
         this._holding.set(spark.id, false);
+        this._heldSince.delete(spark.id);
         this._lastError.delete(spark.id);
         this._recordEvent({
           type: "gpu.clockcap.auto.released",

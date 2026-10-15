@@ -76,8 +76,11 @@ test("GET /api/sparks/clock-cap/auto answers the default disabled state", async 
   assert.equal(body.enabled, false);
   assert.equal(body.holdTempC, 72);
   assert.equal(body.releaseTempC, 67);
-  assert.deepEqual(body.range, { min: 1800, max: 2200 });
-  assert.deepEqual(body.presets, [1800, 1900, 2000, 2100, 2200]);
+  assert.deepEqual(body.range, { min: 1800, max: 2400 });
+  assert.deepEqual(
+    body.presets,
+    [1800, 1850, 1900, 1950, 2000, 2050, 2100, 2150, 2200, 2250, 2300, 2350, 2400]
+  );
   assert.deepEqual(body.sparks, []);
 });
 
@@ -91,7 +94,7 @@ test("POST /api/sparks/clock-cap/auto rejects non-boolean enabled and out-of-ran
     });
     assert.equal(res.status, 400, `body ${JSON.stringify(body)}`);
   }
-  for (const capMhz of [1700, 2300, 2000.5, "abc"]) {
+  for (const capMhz of [1700, 2450, 2000.5, "abc"]) {
     const res = await fetch(`${base}/api/sparks/clock-cap/auto`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -102,6 +105,19 @@ test("POST /api/sparks/clock-cap/auto rejects non-boolean enabled and out-of-ran
     assert.equal(typeof body.error, "string");
     assert.ok(body.error.length > 0);
   }
+});
+
+test("POST /api/sparks/clock-cap/auto accepts a 50 MHz-step hold cap", async (t) => {
+  const { base } = await startServer(t);
+  const res = await fetch(`${base}/api/sparks/clock-cap/auto`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: true, capMhz: 2350 }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.enabled, true);
+  assert.equal(body.capMhz, 2350);
 });
 
 test("POST /api/sparks/clock-cap/auto enables and disables the controller", async (t) => {

@@ -431,7 +431,7 @@ const allowToolEval = createRateLimiter(30, 60_000);
 const monitors = new Map();
 
 // ─── Fleet-wide clock-cap auto mode (SPARK-7) ────────────
-// One controller for every Spark: holds a cap (1800–2200 MHz) while a node's
+// One controller for every Spark: holds a cap (1800–2400 MHz) while a node's
 // GPU is ≥72 °C and releases it again at ≤67 °C. Temperatures come from each
 // monitor's metrics snapshot; only fresh, successfully collected readings act.
 const fleetClockAuto = new FleetClockAuto({
@@ -2478,7 +2478,7 @@ app.post("/api/sparks/clock-cap/mode", async (req, res) => {
 
 // ─── Fleet-wide clock-cap auto mode ──────────────────────
 // One control for the whole fleet: while enabled, the controller holds a cap
-// (within 1800–2200 MHz) on any node whose GPU reaches 72 °C and releases it
+// (within 1800–2400 MHz) on any node whose GPU reaches 72 °C and releases it
 // again at 67 °C. See server/clockCapAuto.js.
 app.get("/api/sparks/clock-cap/auto", (_req, res) => {
   res.json({ success: true, ...fleetClockAuto.status() });
@@ -2706,8 +2706,8 @@ if (!startupPreflight.fatal) {
     clockCapAuto.start(registry);
     fleetClockAuto.start();
     // SPARK-11: restore the persisted fleet Auto state so the Settings toggle
-    // and hold-cap dropdown show the saved values after a restart, and run
-    // the reconcile loop against the persisted fleet target.
+    // and hold cap show the saved values after a restart, and run the
+    // reconcile loop against the persisted fleet target.
     const savedAuto = getSettings();
     if (
       savedAuto.fleetClockAutoEnabled &&

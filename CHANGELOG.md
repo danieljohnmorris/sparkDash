@@ -1,5 +1,11 @@
 # Changelog
 
+## SPARK-12 — Settings GPU clock: one Fleet preset control, Auto thermal hold toggle
+
+- The duplicate **Hold cap (Auto only)** dropdown is gone from Settings; the Fleet presets are the single control. With Auto thermal hold off, picking a preset applies it immediately to every Spark; with Auto on, the picked preset becomes the held cap.
+- Presets are now **1800–2400 MHz in 50 MHz steps** plus **Uncapped** (replaces "Unlocked"), and the server accepts the 50 MHz values end-to-end (`server/clockCap.js`, `server/clockCapAuto.js`). The description text and range now read 1800–2400, not the stale 1800–2200.
+- The Auto control is a real on/off **Auto thermal hold** switch that loads its state from and persists it to the backend. When on it shows the hold/release help text plus a live **Holding since <time>** / **Idle** state; when off it shows "Off: the preset you pick is applied now and stays."
+
 ## SPARK-11 — Fleet GPU clock cap: apply locally, reconcile drift, show real state
 
 - The fleet clock-cap target (fixed MHz / Unlocked / Auto) is persisted in `config/settings.json` and a reconcile loop (`server/clockCapReconcile.js`, same cadence as the Auto tick) re-applies it to any Spark whose status drifted — stale marker after a reboot, an out-of-band `nvidia-smi -rgc`, or a mismatched MHz — recording a `gpu.clockcap.reapplied` event. It stands down while fleet Auto owns the fleet and skips per-node Auto.
